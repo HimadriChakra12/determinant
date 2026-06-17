@@ -14,29 +14,31 @@
 enum {
 	DEFAULT,
 	BLUE,
+	GREEN,
 };
 
 static Color colors[] = {
 	[DEFAULT] = { .fg = -1,         .bg = -1, .fg256 = -1, .bg256 = -1, },
 	[BLUE]    = { .fg = COLOR_BLUE, .bg = -1, .fg256 = 68, .bg256 = -1, },
+	[GREEN]    = { .fg = COLOR_GREEN, .bg = -1, .fg256 = 10, .bg256 = -1, },
 };
 
 #define COLOR(c)        COLOR_PAIR(colors[c].pair)
 /* curses attributes for the currently focused window */
-#define SELECTED_ATTR   (COLOR(BLUE) | A_NORMAL)
+#define SELECTED_ATTR   (COLOR(DEFAULT) | A_PROTECT)
 /* curses attributes for normal (not selected) windows */
 #define NORMAL_ATTR     (COLOR(DEFAULT) | A_NORMAL)
 /* curses attributes for a window with pending urgent flag */
 #define URGENT_ATTR     NORMAL_ATTR
-/* curses attributes for the status bar */
-#define BAR_ATTR        (COLOR(BLUE) | A_NORMAL)
+/* workspace */ 
+#define BAR_ATTR        (COLOR(GREEN) | A_PROTECT)
 /* characters for beginning and end of status bar message */
-#define BAR_BEGIN       '['
-#define BAR_END         ']'
+#define BAR_BEGIN       ' '
+#define BAR_END         ' '
 /* status bar (command line option -s) position */
-#define BAR_POS         BAR_TOP /* BAR_BOTTOM, BAR_OFF */
+#define BAR_POS         BAR_BOTTOM /* BAR_BOTTOM, BAR_OFF */
 /* whether status bar should be hidden if only one client exists */
-#define BAR_AUTOHIDE    true
+#define BAR_AUTOHIDE    false
 /* master width factor [0.1 .. 0.9] */
 #define MFACT 0.5
 /* number of clients in master area */
@@ -44,17 +46,17 @@ static Color colors[] = {
 /* scroll back buffer size in lines */
 #define SCROLL_HISTORY 500
 /* printf format string for the tag in the status bar */
-#define TAG_SYMBOL   "[%s]"
+#define TAG_SYMBOL   " %s "
 /* curses attributes for the currently selected tags */
-#define TAG_SEL      (COLOR(BLUE) | A_BOLD)
+#define TAG_SEL      (COLOR(GREEN) | A_BOLD | A_UNDERLINE)
 /* curses attributes for not selected tags which contain no windows */
-#define TAG_NORMAL   (COLOR(DEFAULT) | A_NORMAL)
+#define TAG_NORMAL   (COLOR(DEFAULT) | A_PROTECT)
 /* curses attributes for not selected tags which contain windows */
-#define TAG_OCCUPIED (COLOR(BLUE) | A_NORMAL)
+#define TAG_OCCUPIED (COLOR(GREEN) | A_NORMAL)
 /* curses attributes for not selected tags which with urgent windows */
 #define TAG_URGENT (COLOR(BLUE) | A_NORMAL | A_BLINK)
 
-const char tags[][8] = { "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+const char tags[][8] = { "one", "two", "three" };
 
 #include "tile.c"
 #include "grid.c"
@@ -69,7 +71,10 @@ static Layout layouts[] = {
 	{ "[ ]", fullscreen },
 };
 
-#define MOD  CTRL('a')
+#define MOD  CTRL('c')
+#define GO  CTRL('s')
+#define LAZY  CTRL(' ')
+
 #define TAGKEYS(KEY,TAG) \
 	{ { MOD, 'v', KEY,     }, { view,           { tags[TAG] }               } }, \
 	{ { MOD, 't', KEY,     }, { tag,            { tags[TAG] }               } }, \
@@ -89,9 +94,10 @@ static KeyBinding bindings[] = {
 	{ { MOD, 'k',          }, { focusprev,      { NULL }                    } },
 	{ { MOD, 't',          }, { setlayout,      { "[]=" }                   } },
 	{ { MOD, 'f',          }, { setlayout,      { "[ ]" }                   } },
-	//{ { MOD, 'g',          }, { setlayout,      { "+++" }                   } },
+	{ { MOD, 'g',          }, { setlayout,      { "+++" }                   } },
 	//{ { MOD, 'b',          }, { setlayout,      { "TTT" }                   } },
-	//{ { MOD, ' ',          }, { setlayout,      { NULL }                    } },
+	{ { LAZY, ' ',          }, { create,      { "lazygit" }                    } },
+	{ { LAZY, 'n',          }, { create,      { "neovim [ ]" }                    } },
 	{ { MOD, 'o',          }, { incnmaster,     { "+1" }                    } },
 	{ { MOD, 'O',          }, { incnmaster,     { "-1" }                    } },
 	{ { MOD, 'h',          }, { setmfact,       { "-0.05" }                 } },
@@ -102,40 +108,32 @@ static KeyBinding bindings[] = {
 	{ { MOD, 'M',          }, { togglemouse,    { NULL }                    } },
 	{ { MOD, 'm',          }, { zoom ,          { NULL }                    } },
 	//{ { MOD, '1',          }, { focusn,         { "1" }                     } },
+	{ { GO, '1',          }, { view,         { tags[0] }                     } },
+	{ { GO, '2',          }, { view,         { tags[1] }                     } },
+	{ { GO, '3',          }, { view,         { tags[2] }                     } },
 	{ { MOD, '1',          }, { view,         { tags[0] }                     } },
 	{ { MOD, '2',          }, { view,         { tags[1] }                     } },
 	{ { MOD, '3',          }, { view,         { tags[2] }                     } },
-	{ { MOD, '4',          }, { view,         { tags[3] }                     } },
-	{ { MOD, '5',          }, { view,         { tags[4] }                     } },
-	{ { MOD, '6',          }, { view,         { tags[5] }                     } },
-	{ { MOD, '7',          }, { view,         { tags[6] }                     } },
-	{ { MOD, '8',          }, { view,         { tags[7] }                     } },
-	{ { MOD, '9',          }, { view,         { tags[8] }                     } },
+	//{ { DALT, '4',          }, { view,         { tags[3] }                     } },
+	//{ { DALT, '5',          }, { view,         { tags[4] }                     } },
+	//{ { DALT, '6',          }, { view,         { tags[5] }                     } },
+	//{ { DALT, '7',          }, { view,         { tags[6] }                     } },
+	//{ { DALT, '8',          }, { view,         { tags[7] }                     } },
+	//{ { DALT, '9',          }, { view,         { tags[8] }                     } },
 	{ { MOD, '\t',         }, { focuslast,      { NULL }                    } },
 	{ { MOD, 'E',          }, { quit,           { NULL }                    } },
 	{ { MOD, 'a',          }, { togglerunall,   { NULL }                    } },
 	{ { MOD, CTRL('L'),    }, { redraw,         { NULL }                    } },
 	{ { MOD, 'r',          }, { redraw,         { NULL }                    } },
-	{ { MOD, 'e',          }, { copymode,       { "dvtm-editor" }           } },
 	{ { MOD, 'P',          }, { copymode,       { "dvtm-pager" }            } },
 	{ { MOD, '/',          }, { copymode,       { "dvtm-pager", "/" }       } },
 	{ { MOD, 'p',          }, { paste,          { NULL }                    } },
 	{ { MOD, KEY_PPAGE,    }, { scrollback,     { "-1" }                    } },
 	{ { MOD, KEY_NPAGE,    }, { scrollback,     { "1"  }                    } },
-	{ { MOD, '?',          }, { create,         { "man dvtm", "dvtm help" } } },
 	{ { MOD, MOD,          }, { send,           { (const char []){MOD, 0} } } },
 	{ { KEY_SPREVIOUS,     }, { scrollback,     { "-1" }                    } },
 	{ { KEY_SNEXT,         }, { scrollback,     { "1"  }                    } },
 	{ { MOD, '0',          }, { view,           { NULL }                    } },
-	{ { MOD, KEY_F(1),     }, { view,           { tags[0] }                 } },
-	{ { MOD, KEY_F(2),     }, { view,           { tags[1] }                 } },
-	{ { MOD, KEY_F(3),     }, { view,           { tags[2] }                 } },
-	{ { MOD, KEY_F(4),     }, { view,           { tags[3] }                 } },
-	{ { MOD, KEY_F(5),     }, { view,           { tags[4] }                 } },
-	{ { MOD, KEY_F(6),     }, { view,           { tags[5] }                 } },
-	{ { MOD, KEY_F(7),     }, { view,           { tags[6] }                 } },
-	{ { MOD, KEY_F(8),     }, { view,           { tags[7] }                 } },
-	{ { MOD, KEY_F(9),     }, { view,           { tags[8] }                 } },
 	{ { MOD, 'v', '0'      }, { view,           { NULL }                    } },
 	{ { MOD, 'v', '\t',    }, { viewprevtag,    { NULL }                    } },
 	//{ { MOD, 't', '0'      }, { tag,            { NULL }                    } },
