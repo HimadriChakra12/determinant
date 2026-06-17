@@ -1,8 +1,8 @@
 .Dd December 27, 2016
-.Dt DVTM-EDITOR 1
-.Os dvtm VERSION
+.Dt DET-EDITOR 1
+.Os det VERSION
 .Sh NAME
-.Nm dvtm-editor
+.Nm det-editor
 .Nd make a text editor act as a filter
 .
 .
@@ -17,7 +17,7 @@ ARGS...
 The
 .Nm
 is a file buffering utility used by the
-.Xr dvtm 1
+.Xr det 1
 terminal multiplexer to implement its copy mode. It reads the standard input and saves it to a temporary
 file, then opens an editor according to the
 .Sx "ENVIRONMENT VARIABLES" .
@@ -29,7 +29,7 @@ does not output anything.  Otherwise, it outputs the content of the modified tem
 file to stdout.
 .Pp
 All command line arguments are forwarded verbatim.
-.Xr dvtm 1
+.Xr det 1
 uses this to adjust the initial view port by passing
 .Sy +n ,
 meaning the start of line
@@ -43,8 +43,8 @@ should be displayed.
 will try to find the user editor by checking these variables in order:
 .
 .Bl -tag -width indent
-.It Ev DVTM_EDITOR
-Permitting to invoke an editor specific to dvtm, or set particular flags.
+.It Ev DET_EDITOR
+Permitting to invoke an editor specific to det, or set particular flags.
 .
 .It Ev VISUAL , Ev EDITOR
 Falling back to global defaults:
@@ -61,7 +61,7 @@ is used.
 .Sh FILES
 .
 The temporary files are created according to the template:
-.Pa /tmp/dvtm-editor.XXXXXX .
+.Pa /tmp/det-editor.XXXXXX .
 .Pp
 .Pa /dev/tty
 is opened to obtain a controlling tty which is used for the standard input/output
@@ -78,11 +78,11 @@ in visual mode will reduce the file to the currently active selection(s).
 .Sh SEE ALSO
 .
 .Xr vi 1 ,
-.Xr dvtm 1 ,
-.Xr dvtm-pager 1
+.Xr det 1 ,
+.Xr det-pager 1
 .
 .
 .Sh AUTHOR
 .
-dvtm is written by
+det is written by
 .An Marc André Tanner Aq Mt mat at brain-dump.org

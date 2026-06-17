@@ -1,9 +1,9 @@
 .Dd January 03, 2017
-.Dt DVTM-PAGER 1
-.Os dvtm VERSION
+.Dt DET-PAGER 1
+.Os det VERSION
 .Sh NAME
-.Nm dvtm-pager
-.Nd select apropriate pager for dvtm
+.Nm det-pager
+.Nd select apropriate pager for det
 .
 .
 .Sh SYNOPSIS
@@ -16,13 +16,13 @@ ARGS...
 .
 .Nm
 is an utility used by the
-.Xr dvtm 1
+.Xr det 1
 terminal multiplexer to display its scrollback history using a suitable pager.
 .Pp
 The invoked pager is expected to display the data sent to its standard input.
 The data stream might contain ANSI color escape sequence.
 All command line arguments are forwarded verbatim.
-.Xr dvtm 1
+.Xr det 1
 uses this to adjust the initial view port by passing
 .Sy +n ,
 meaning the start of line
@@ -36,8 +36,8 @@ should be displayed.
 will try to find the preferred pager by checking these variables in order:
 .
 .Bl -tag -width indent
-.It Ev DVTM_PAGER
-Permitting to invoke a pager specific to dvtm, or set particular flags such as
+.It Ev DET_PAGER
+Permitting to invoke a pager specific to det, or set particular flags such as
 .Fl R
 for
 .Xr less 1 .
@@ -54,11 +54,11 @@ is used.
 .Sh SEE ALSO
 .
 .Xr less 1 ,
-.Xr dvtm 1 ,
-.Xr dvtm-editor 1
+.Xr det 1 ,
+.Xr det-editor 1
 .
 .
 .Sh AUTHOR
 .
-dvtm is written by
+det is written by
 .An Marc André Tanner Aq Mt mat at brain-dump.org

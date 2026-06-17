@@ -60,10 +60,10 @@ static Color colors[] = {
 
 const char tags[][8] = { "one", "two", "three" };
 
-#include "tile.c"
-#include "grid.c"
-#include "bstack.c"
-#include "fullscreen.c"
+#include "src/layout/tile.c"
+#include "src/layout/grid.c"
+#include "src/layout/bstack.c"
+#include "src/layout/fullscreen.c"
 
 /* by default the first layout entry is used */
 static Layout layouts[] = {

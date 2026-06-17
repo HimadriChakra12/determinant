@@ -1,6 +1,6 @@
 include config.mk
 
-SRC = det.c vt.c
+SRC = det.c src/vt.c
 BIN = det det-status det-editor det-pager
 MANUALS = det.1 det-editor.1 det-pager.1
 
@@ -13,7 +13,7 @@ all: det det-editor
 det: config.h config.mk *.c *.h
 	${CC} ${CFLAGS} ${SRC} ${LDFLAGS} ${LIBS} -o $@
 
-det-editor: det-editor.c
+det-editor: deter/det-editor.c
 	${CC} ${CFLAGS} $^ ${LDFLAGS} -o $@
 
 man:
