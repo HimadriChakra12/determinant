@@ -75,6 +75,7 @@ static Layout layouts[] = {
 
 #define MOD  CTRL('c')
 #define GO  CTRL('s')
+#define FOCUS  CTRL('m')
 #define LAZY  CTRL(' ')
 
 #define TAGKEYS(KEY,TAG) \
@@ -116,6 +117,9 @@ static KeyBinding bindings[] = {
 	{ { MOD, '1',          }, { view,         { tags[0] }                     } },
 	{ { MOD, '2',          }, { view,         { tags[1] }                     } },
 	{ { MOD, '3',          }, { view,         { tags[2] }                     } },
+    { { LAZY, 'm',          }, { focusn,         { "1" }                     } },
+    { { LAZY, ',',          }, { focusn,         { "2" }                     } },
+    { { LAZY, '.',          }, { focusn,         { "3" }                     } },
 	//{ { DALT, '4',          }, { view,         { tags[3] }                     } },
 	//{ { DALT, '5',          }, { view,         { tags[4] }                     } },
 	//{ { DALT, '6',          }, { view,         { tags[5] }                     } },
