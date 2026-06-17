@@ -1,19 +1,19 @@
 include config.mk
 
-SRC = dvtm.c vt.c
-BIN = dvtm dvtm-status dvtm-editor dvtm-pager
-MANUALS = dvtm.1 dvtm-editor.1 dvtm-pager.1
+SRC = det.c vt.c
+BIN = det det-status det-editor det-pager
+MANUALS = det.1 det-editor.1 det-pager.1
 
 VERSION = $(shell git describe --always --dirty 2>/dev/null || echo "0.15-git")
 CFLAGS += -DVERSION=\"${VERSION}\"
 DEBUG_CFLAGS = ${CFLAGS} -UNDEBUG -O0 -g -ggdb -Wall -Wextra -Wno-unused-parameter
 
-all: dvtm dvtm-editor
+all: det det-editor
 
-dvtm: config.h config.mk *.c *.h
+det: config.h config.mk *.c *.h
 	${CC} ${CFLAGS} ${SRC} ${LDFLAGS} ${LIBS} -o $@
 
-dvtm-editor: dvtm-editor.c
+det-editor: det-editor.c
 	${CC} ${CFLAGS} $^ ${LDFLAGS} -o $@
 
 man:
@@ -27,12 +27,12 @@ debug: clean
 
 clean:
 	@echo cleaning
-	@rm -f dvtm
-	@rm -f dvtm-editor
+	@rm -f det
+	@rm -f det-editor
 
 dist: clean
 	@echo creating dist tarball
-	@git archive --prefix=dvtm-${VERSION}/ -o dvtm-${VERSION}.tar.gz HEAD
+	@git archive --prefix=det-${VERSION}/ -o det-${VERSION}.tar.gz HEAD
 
 install: all
 	@mkdir -p ${DESTDIR}${PREFIX}/bin
@@ -48,7 +48,7 @@ install: all
 		chmod 644 "${DESTDIR}${MANPREFIX}/man1/$$m"; \
 	done
 	@echo installing terminfo description
-	@TERMINFO=${TERMINFO} tic -s dvtm.info
+	@TERMINFO=${TERMINFO} tic -s det.info
 
 uninstall:
 	@for b in ${BIN}; do \
@@ -56,6 +56,6 @@ uninstall:
 		rm -f "${DESTDIR}${PREFIX}/bin/$$b"; \
 	done
 	@echo removing manual page from ${DESTDIR}${MANPREFIX}/man1
-	@rm -f ${DESTDIR}${MANPREFIX}/man1/dvtm.1
+	@rm -f ${DESTDIR}${MANPREFIX}/man1/det.1
 
 .PHONY: all clean dist install uninstall debug
