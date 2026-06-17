@@ -15,12 +15,14 @@ enum {
 	DEFAULT,
 	BLUE,
 	GREEN,
+	ACTIVE,
 };
 
 static Color colors[] = {
 	[DEFAULT] = { .fg = -1,         .bg = -1, .fg256 = -1, .bg256 = -1, },
 	[BLUE]    = { .fg = COLOR_BLUE, .bg = -1, .fg256 = 68, .bg256 = -1, },
 	[GREEN]    = { .fg = COLOR_GREEN, .bg = -1, .fg256 = 10, .bg256 = -1, },
+	[ACTIVE]    =  { .fg = COLOR_BLACK, .bg = COLOR_GREEN, .fg256 = 0, .bg256 = 10, },
 };
 
 #define COLOR(c)        COLOR_PAIR(colors[c].pair)
@@ -48,7 +50,7 @@ static Color colors[] = {
 /* printf format string for the tag in the status bar */
 #define TAG_SYMBOL   " %s "
 /* curses attributes for the currently selected tags */
-#define TAG_SEL      (COLOR(GREEN) | A_BOLD | A_UNDERLINE)
+#define TAG_SEL      (COLOR(ACTIVE) | A_BOLD )
 /* curses attributes for not selected tags which contain no windows */
 #define TAG_NORMAL   (COLOR(DEFAULT) | A_PROTECT)
 /* curses attributes for not selected tags which contain windows */
@@ -65,10 +67,10 @@ const char tags[][8] = { "one", "two", "three" };
 
 /* by default the first layout entry is used */
 static Layout layouts[] = {
-	{ "[]=", tile },
-	{ "+++", grid },
-	{ "TTT", bstack },
-	{ "[ ]", fullscreen },
+	{ " *T* ", tile },
+	{ " *G* ", grid },
+	{ " *B* ", bstack },
+	{ " *F* ", fullscreen },
 };
 
 #define MOD  CTRL('c')
@@ -92,10 +94,10 @@ static KeyBinding bindings[] = {
 	{ { MOD, 'H',          }, { focusleft,      { NULL }                    } },
 	{ { MOD, 'L',          }, { focusright,     { NULL }                    } },
 	{ { MOD, 'k',          }, { focusprev,      { NULL }                    } },
-	{ { MOD, 't',          }, { setlayout,      { "[]=" }                   } },
-	{ { MOD, 'f',          }, { setlayout,      { "[ ]" }                   } },
-	{ { MOD, 'g',          }, { setlayout,      { "+++" }                   } },
-	//{ { MOD, 'b',          }, { setlayout,      { "TTT" }                   } },
+	{ { MOD, 't',          }, { setlayout,      { "T" }                   } },
+	{ { MOD, 'f',          }, { setlayout,      { "F" }                   } },
+	{ { MOD, 'g',          }, { setlayout,      { "G" }                   } },
+	//{ { MOD, 'b',          }, { setlayout,      { "B" }                   } },
 	{ { LAZY, ' ',          }, { create,      { "lazygit" }                    } },
 	{ { LAZY, 'n',          }, { create,      { "neovim [ ]" }                    } },
 	{ { MOD, 'o',          }, { incnmaster,     { "+1" }                    } },
@@ -186,7 +188,7 @@ static const ColorRule colorrules[] = {
 #ifdef CONFIG_MOUSE
 static Button buttons[] = {
 	{ BUTTON1_CLICKED,        { mouse_focus,      { NULL  } } },
-	{ BUTTON1_DOUBLE_CLICKED, { mouse_fullscreen, { "[ ]" } } },
+	{ BUTTON1_DOUBLE_CLICKED, { mouse_fullscreen, { "F" } } },
 	{ BUTTON2_CLICKED,        { mouse_zoom,       { NULL  } } },
 	{ BUTTON3_CLICKED,        { mouse_minimize,   { NULL  } } },
 };

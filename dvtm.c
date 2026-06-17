@@ -233,7 +233,7 @@ static KeyCombo keys;
 #include "config.h"
 
 /* global variables */
-static const char *dvtm_name = "dvtm";
+static const char *dvtm_name = "det";
 Screen screen = { .mfact = MFACT, .nmaster = NMASTER, .history = SCROLL_HISTORY };
 static Client *stack = NULL;
 static Client *sel = NULL;
@@ -352,8 +352,8 @@ drawbar(void) {
 	}
 
 	attrset(runinall ? TAG_SEL : TAG_NORMAL);
-	addstr(layout->symbol);
 	attrset(TAG_NORMAL);
+	addstr(layout->symbol);
 
 	for (unsigned int i = 0; i < MAX_KEYS && keys[i]; i++) {
 		if (keys[i] < ' ')
@@ -422,7 +422,7 @@ draw_border(Client *c) {
 		c->title[maxlen] = '\0';
 	}
 
-	mvwprintw(c->window, 0, 2, "[%s%s#%d]",
+	mvwprintw(c->window, 0, 2, " %s%s%d ",
 	          *c->title ? c->title : "",
 	          *c->title ? " | " : "",
 	          c->order);
