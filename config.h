@@ -67,10 +67,10 @@ const char tags[][8] = { "one", "two", "three" };
 
 /* by default the first layout entry is used */
 static Layout layouts[] = {
-	{ " *T* ", tile },
-	{ " *G* ", grid },
-	{ " *B* ", bstack },
-	{ " *F* ", fullscreen },
+	{ " T ", tile },
+	{ " G ", grid },
+	{ " B ", bstack },
+	{ " F ", fullscreen },
 };
 
 #define MOD  CTRL('c')
