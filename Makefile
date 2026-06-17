@@ -13,7 +13,7 @@ all: det det-editor
 det: config.h config.mk *.c *.h
 	${CC} ${CFLAGS} ${SRC} ${LDFLAGS} ${LIBS} -o $@
 
-det-editor: deter/det-editor.c
+det-editor: det-editor.c
 	${CC} ${CFLAGS} $^ ${LDFLAGS} -o $@
 
 man:
