@@ -88,6 +88,11 @@ static short color_pairs_reserved, color_pairs_max, color_pair_current;
 static short *color2palette, default_fg, default_bg;
 static char vt_term[32];
 static bool has_truecolor;
+static bool has_direct_color; /* host terminal accepts raw 38;2/48;2 SGR
+                                * directly -- skip the indexed-color
+                                * registration path (has_truecolor) entirely
+                                * when this is true, since it's strictly
+                                * faster: no OSC4 round trip per new color. */
 
 /* truecolor (24-bit RGB) extended-pair cache, separate from the palette
  * cache above: keyed by packed RGB rather than an 8-bit palette index,
@@ -100,6 +105,99 @@ typedef struct {
 } TruecolorPair;
 static TruecolorPair truecolor_cache[TRUECOLOR_PAIRS_MAX];
 static int truecolor_cache_next;
+
+/*
+ * Open-addressing hash index over truecolor_cache, keyed by (fg_rgb,
+ * bg_rgb), so vt_color_get_truecolor() can look up an existing pair in
+ * O(1) average instead of linearly scanning up to TRUECOLOR_PAIRS_MAX
+ * entries per cell on every redraw -- that scan was the main cost of
+ * truecolor support on a busy, colorful screen (a full-screen redraw
+ * with many distinct colors could run it thousands of times per
+ * frame). Sized well above TRUECOLOR_PAIRS_MAX to keep the load factor
+ * low; -1 marks an empty slot (a valid index into truecolor_cache is
+ * always >= 0).
+ */
+#define TRUECOLOR_HASH_SIZE (TRUECOLOR_PAIRS_MAX * 4)
+static int truecolor_hash_index[TRUECOLOR_HASH_SIZE];
+
+static unsigned int truecolor_hash(int32_t fg_rgb, int32_t bg_rgb)
+{
+	/* simple, fast mix -- these are already well-distributed 24-bit
+	 * values (or -1), collisions are handled by linear probing below
+	 * regardless, so this doesn't need to be cryptographically sound. */
+	unsigned int h = (unsigned int)fg_rgb * 2654435761u;
+	h ^= (unsigned int)bg_rgb * 40503u;
+	return h % TRUECOLOR_HASH_SIZE;
+}
+
+/* look up a cached pair by (fg_rgb, bg_rgb); returns the cache slot
+ * index, or -1 if not found. */
+static int truecolor_hash_find(int32_t fg_rgb, int32_t bg_rgb)
+{
+	unsigned int h = truecolor_hash(fg_rgb, bg_rgb);
+	for (unsigned int i = 0; i < TRUECOLOR_HASH_SIZE; i++) {
+		unsigned int idx = (h + i) % TRUECOLOR_HASH_SIZE;
+		int slot = truecolor_hash_index[idx];
+		if (slot == -1)
+			return -1; /* empty slot: not present */
+		if (truecolor_cache[slot].used && truecolor_cache[slot].fg_rgb == fg_rgb
+		    && truecolor_cache[slot].bg_rgb == bg_rgb)
+			return slot;
+	}
+	return -1;
+}
+
+/* insert (fg_rgb, bg_rgb) -> slot into the hash index. */
+static void truecolor_hash_insert(int32_t fg_rgb, int32_t bg_rgb, int slot)
+{
+	unsigned int h = truecolor_hash(fg_rgb, bg_rgb);
+	for (unsigned int i = 0; i < TRUECOLOR_HASH_SIZE; i++) {
+		unsigned int idx = (h + i) % TRUECOLOR_HASH_SIZE;
+		if (truecolor_hash_index[idx] == -1) {
+			truecolor_hash_index[idx] = slot;
+			return;
+		}
+	}
+	/* hash table somehow full (shouldn't happen, it's 4x oversized
+	 * relative to the cache it indexes) -- silently drop the index
+	 * entry; the cache slot itself still works, just falls back to a
+	 * fresh allocation next time instead of a hit. */
+}
+
+/* remove whatever (fg_rgb, bg_rgb) pair currently occupies this slot
+ * from the hash index, before the slot is evicted/reused for a
+ * different color. */
+static void truecolor_hash_remove(int slot)
+{
+	if (!truecolor_cache[slot].used)
+		return;
+	int32_t fg_rgb = truecolor_cache[slot].fg_rgb;
+	int32_t bg_rgb = truecolor_cache[slot].bg_rgb;
+	unsigned int h = truecolor_hash(fg_rgb, bg_rgb);
+	for (unsigned int i = 0; i < TRUECOLOR_HASH_SIZE; i++) {
+		unsigned int idx = (h + i) % TRUECOLOR_HASH_SIZE;
+		if (truecolor_hash_index[idx] == slot) {
+			truecolor_hash_index[idx] = -1;
+			/*
+			 * Linear-probe deletion hole: re-insert every entry
+			 * that follows in this probe run, since later lookups
+			 * may have skipped past idx assuming it was occupied.
+			 * The cache is small (<=512 real entries) and evictions
+			 * are rare relative to lookups, so this O(run length)
+			 * fixup is cheap in practice.
+			 */
+			unsigned int j = (idx + 1) % TRUECOLOR_HASH_SIZE;
+			while (truecolor_hash_index[j] != -1) {
+				int moved = truecolor_hash_index[j];
+				truecolor_hash_index[j] = -1;
+				truecolor_hash_insert(truecolor_cache[moved].fg_rgb,
+				                       truecolor_cache[moved].bg_rgb, moved);
+				j = (j + 1) % TRUECOLOR_HASH_SIZE;
+			}
+			return;
+		}
+	}
+}
 static int truecolor_cache_size;  /* actual usable cache entries this run, <= TRUECOLOR_PAIRS_MAX */
 static int truecolor_cache_count; /* entries currently in use */
 static short truecolor_pair_base;  /* first pair index truecolor may use */
@@ -1159,6 +1257,26 @@ static void interpret_csi(Vt *t)
 		if (param_count == 1 && csiparam[0] == 6)
 			send_curs(t);
 		break;
+	case 'c': /* DA1/DA2: device attributes -- nvim >=0.12 sends this
+	           * at startup as part of terminal-capability detection
+	           * (same family as the cursor-position DSR probe); with
+	           * no reply at all (dvtm/det never implemented this),
+	           * nvim falls back to its slow-terminal path and shows
+	           * the "Did not detect ... response" / ttyfast warning.
+	           * \e[c or \e[0c -> DA1 (primary attributes): reply
+	           * \e[?1;2c, the same "VT100 with AVO" identification
+	           * mtm uses, which is enough for nvim/most clients to
+	           * conclude the terminal is real and answers queries.
+	           * \e[>c -> DA2 (secondary attributes, terminal
+	           * type/firmware version): reply \e[>1;10;0c, again
+	           * matching mtm's reply verbatim since it's a value
+	           * nvim doesn't actually validate beyond "did something
+	           * answer". */
+		if (t->ebuf[1] == '>')
+			vt_write(t, "\033[>1;10;0c", 10);
+		else
+			vt_write(t, "\033[?1;2c", 7);
+		break;
 	default:
 		break;
 	}
@@ -1494,42 +1612,86 @@ static void put_wc(Vt *t, wchar_t wc)
 int vt_process(Vt *t)
 {
 	int res;
-	unsigned int pos = 0;
-	mbstate_t ps;
-	memset(&ps, 0, sizeof(ps));
 
 	if (t->pty < 0) {
 		errno = EINVAL;
 		return -1;
 	}
 
-	res = read(t->pty, t->rbuf + t->rlen, sizeof(t->rbuf) - t->rlen);
-	if (res < 0)
-		return -1;
+	/*
+	 * Drain everything currently available on the (non-blocking) pty
+	 * in this single call, rather than one BUFSIZ chunk per
+	 * select()/vt_process() round trip -- a busy truecolor repaint can
+	 * easily exceed one BUFSIZ, and previously each extra chunk meant
+	 * another full select()+read()+draw()+doupdate() cycle before the
+	 * screen actually caught up, which is exactly the kind of thing
+	 * that reads as "lag" while scrolling or typing under a colorful
+	 * scheme. Each iteration still parses its chunk fully (including
+	 * carrying over a trailing incomplete multibyte sequence via
+	 * t->rlen/memmove, same as before) before reading more, so this
+	 * doesn't change parsing behavior or buffer-carryover semantics --
+	 * it just stops yielding back to select() between chunks that were
+	 * already sitting in the kernel's pty buffer.
+	 */
+	for (;;) {
+		res = read(t->pty, t->rbuf + t->rlen, sizeof(t->rbuf) - t->rlen);
+		if (res < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+				break; /* nothing more buffered right now */
+			if (errno == EINTR)
+				continue;
+			/*
+			 * A real error (e.g. EIO from a dead child) must still
+			 * be reported even if this call already successfully
+			 * read and processed some data first -- det.c's main
+			 * loop checks `vt_process(...) < 0 && errno == EIO` to
+			 * detect a dead client, and silently returning 0 here
+			 * would delay that detection by up to one extra
+			 * select() cycle. errno is preserved across the return
+			 * since nothing between here and the caller touches it.
+			 */
+			return -1;
+		}
+		if (res == 0)
+			break; /* EOF on a non-blocking fd that selected readable
+			        * shouldn't really happen for a pty, but don't spin */
 
-	t->rlen += res;
-	while (pos < t->rlen) {
-		wchar_t wc;
-		ssize_t len;
+		t->rlen += res;
+		unsigned int pos = 0;
+		mbstate_t ps;
+		memset(&ps, 0, sizeof(ps));
 
-		len = (ssize_t)mbrtowc(&wc, t->rbuf + pos, t->rlen - pos, &ps);
-		if (len == -2) {
-			t->rlen -= pos;
-			memmove(t->rbuf, t->rbuf + pos, t->rlen);
-			return 0;
+		while (pos < t->rlen) {
+			wchar_t wc;
+			ssize_t len;
+
+			len = (ssize_t)mbrtowc(&wc, t->rbuf + pos, t->rlen - pos, &ps);
+			if (len == -2) {
+				t->rlen -= pos;
+				memmove(t->rbuf, t->rbuf + pos, t->rlen);
+				goto next_read;
+			}
+
+			if (len == -1) {
+				len = 1;
+				wc = t->rbuf[pos];
+			}
+
+			pos += len ? len : 1;
+			put_wc(t, wc);
 		}
 
-		if (len == -1) {
-			len = 1;
-			wc = t->rbuf[pos];
-		}
+		t->rlen -= pos;
+		memmove(t->rbuf, t->rbuf + pos, t->rlen);
 
-		pos += len ? len : 1;
-		put_wc(t, wc);
+	next_read:
+		/* rbuf is full and still ended mid-sequence/mid-chunk -- avoid
+		 * an infinite loop if for some reason no bytes were consumed;
+		 * normal operation always makes forward progress here. */
+		if (t->rlen >= sizeof(t->rbuf))
+			break;
 	}
 
-	t->rlen -= pos;
-	memmove(t->rbuf, t->rbuf + pos, t->rlen);
 	return 0;
 }
 
@@ -1784,6 +1946,19 @@ pid_t vt_forkpty(Vt *t, const char *p, const char *argv[], const char *cwd, cons
 		close(ed2vt[1]);
 		*from = ed2vt[0];
 	}
+
+	/*
+	 * Non-blocking so vt_process() can drain everything currently
+	 * buffered on the pty in one call instead of one BUFSIZ (8KB)
+	 * chunk per select()/vt_process() round trip. A single full-screen
+	 * truecolor repaint can easily exceed 8KB, which previously meant
+	 * several extra select()+read()+draw()+doupdate() cycles for what
+	 * should have been one -- a real, measurable source of perceived
+	 * input lag under a busy truecolor colorscheme.
+	 */
+	int flags = fcntl(t->pty, F_GETFL, 0);
+	if (flags != -1)
+		fcntl(t->pty, F_SETFL, flags | O_NONBLOCK);
 
 	return t->pid = pid;
 }
@@ -2053,12 +2228,11 @@ static short vt_color_get_truecolor(int32_t fg_rgb, int32_t bg_rgb)
 	if (!has_default_colors && (fg_rgb == -1 || bg_rgb == -1))
 		return 0; /* terminal can't do default colors; caller must fall back */
 
-	for (int i = 0; i < truecolor_cache_size; i++) {
-		if (truecolor_cache[i].used && truecolor_cache[i].fg_rgb == fg_rgb
-		    && truecolor_cache[i].bg_rgb == bg_rgb)
-			return truecolor_cache[i].pair;
-	}
+	int hit = truecolor_hash_find(fg_rgb, bg_rgb);
+	if (hit >= 0)
+		return truecolor_cache[hit].pair;
 
+	int slot;
 	if (truecolor_cache_count >= truecolor_cache_size) {
 		/* out of reserved pairs/colors: evict the oldest entry rather
 		 * than reuse a slot whose *color* definition (not just its
@@ -2066,47 +2240,67 @@ static short vt_color_get_truecolor(int32_t fg_rgb, int32_t bg_rgb)
 		 * pair -- each cache slot owns its own dedicated pair+color
 		 * indices for its whole lifetime, so eviction here only ever
 		 * frees a slot that's no longer pointed at by this cache. */
-		int slot = truecolor_cache_next;
+		slot = truecolor_cache_next;
 		truecolor_cache_next = (truecolor_cache_next + 1) % truecolor_cache_size;
+		truecolor_hash_remove(slot);
 		truecolor_cache[slot].used = false;
+	} else {
+		/* cache isn't full yet: truecolor_cache_count itself is the
+		 * next free slot, since slots are filled in order until the
+		 * eviction path above starts recycling. */
+		slot = truecolor_cache_count;
 	}
-
-	/* find a free slot (there's guaranteed to be one after the evict above) */
-	int slot = -1;
-	for (int i = 0; i < truecolor_cache_size; i++) {
-		if (!truecolor_cache[i].used) {
-			slot = i;
-			break;
-		}
-	}
-	if (slot < 0)
-		return 0; /* shouldn't happen, but fail safe rather than corrupt */
 
 	short pair = truecolor_pair_base + slot;
 
 #if defined(NCURSES_EXT_COLORS) && NCURSES_EXT_COLORS
-	/* each slot owns two dedicated extended-color indices for its
-	 * entire lifetime in the cache, so redefining them here can never
-	 * corrupt a different, still-displayed pair the way sharing a
-	 * small round-robin color range could. -1 on either side is passed
-	 * straight through as the *color index* (not an RGB triple) so
-	 * ncurses resolves it as the terminal default rather than us
-	 * misreading it as white. */
-	int fg_idx = -1, bg_idx = -1;
-	if (fg_rgb != -1) {
-		fg_idx = truecolor_color_base + slot * 2;
-		init_extended_color(fg_idx, rgb_channel_to_curses((fg_rgb >> 16) & 0xff),
-		                     rgb_channel_to_curses((fg_rgb >> 8) & 0xff),
-		                     rgb_channel_to_curses(fg_rgb & 0xff));
+	if (has_direct_color) {
+		/*
+		 * Direct-color terminfo (det-direct's setaf/setab use the
+		 * xterm-direct-style parameterized RGB template, decoding
+		 * a packed 0xRRGGBB integer back into three SGR parameters
+		 * via terminfo arithmetic) lets init_extended_pair() take
+		 * the packed RGB value *directly* as its color argument --
+		 * no init_extended_color() registration step, no OSC4. This
+		 * is the actual ncurses-documented way to drive a -direct
+		 * terminal (see init_extended_pair(3NCURSES)/ncurses FAQ):
+		 * "the application should pass actual packed RGB colours
+		 * ... such as 0xFF7F00" directly to init_extended_pair().
+		 * curses' own buffered output (vidputs, used by doupdate())
+		 * resolves the resulting pair through setaf/setab at the
+		 * correct point in the output stream, so unlike a raw
+		 * putp() write this can't desync relative to character
+		 * output during line wraps -- it goes through the exact
+		 * same buffering path normal indexed colors already use.
+		 * -1 (terminal default) is passed straight through, same
+		 * as the indexed path below.
+		 */
+		if (init_extended_pair(pair, fg_rgb, bg_rgb) != OK)
+			return 0;
+	} else {
+		/* each slot owns two dedicated extended-color indices for
+		 * its entire lifetime in the cache, so redefining them here
+		 * can never corrupt a different, still-displayed pair the
+		 * way sharing a small round-robin color range could. -1 on
+		 * either side is passed straight through as the *color
+		 * index* (not an RGB triple) so ncurses resolves it as the
+		 * terminal default rather than us misreading it as white. */
+		int fg_idx = -1, bg_idx = -1;
+		if (fg_rgb != -1) {
+			fg_idx = truecolor_color_base + slot * 2;
+			init_extended_color(fg_idx, rgb_channel_to_curses((fg_rgb >> 16) & 0xff),
+			                     rgb_channel_to_curses((fg_rgb >> 8) & 0xff),
+			                     rgb_channel_to_curses(fg_rgb & 0xff));
+		}
+		if (bg_rgb != -1) {
+			bg_idx = truecolor_color_base + slot * 2 + 1;
+			init_extended_color(bg_idx, rgb_channel_to_curses((bg_rgb >> 16) & 0xff),
+			                     rgb_channel_to_curses((bg_rgb >> 8) & 0xff),
+			                     rgb_channel_to_curses(bg_rgb & 0xff));
+		}
+		if (init_extended_pair(pair, fg_idx, bg_idx) != OK)
+			return 0;
 	}
-	if (bg_rgb != -1) {
-		bg_idx = truecolor_color_base + slot * 2 + 1;
-		init_extended_color(bg_idx, rgb_channel_to_curses((bg_rgb >> 16) & 0xff),
-		                     rgb_channel_to_curses((bg_rgb >> 8) & 0xff),
-		                     rgb_channel_to_curses(bg_rgb & 0xff));
-	}
-	if (init_extended_pair(pair, fg_idx, bg_idx) != OK)
-		return 0;
 #else
 	/* no ext-colors: degrade to nearest-256-color; ncurses' classic
 	 * init_pair() also accepts -1 for either side when
@@ -2124,6 +2318,7 @@ static short vt_color_get_truecolor(int32_t fg_rgb, int32_t bg_rgb)
 	truecolor_cache[slot].bg_rgb = bg_rgb;
 	truecolor_cache[slot].pair = pair;
 	truecolor_cache[slot].used = true;
+	truecolor_hash_insert(fg_rgb, bg_rgb, slot);
 	if (truecolor_cache_count < truecolor_cache_size)
 		truecolor_cache_count++;
 	return pair;
@@ -2138,6 +2333,26 @@ static void init_colors(void)
 		default_bg = COLOR_BLACK;
 	has_default_colors = (use_default_colors() == OK);
 	color_pairs_max = MIN(MAX_COLOR_PAIRS, SHRT_MAX);
+
+	/*
+	 * Detect whether init_extended_pair()'s packed-RGB convention will
+	 * actually work against the *host* terminal's currently-loaded
+	 * terminfo (whatever det itself was launched under: foot, st,
+	 * xterm, etc, set by initscr() before this runs). This only works
+	 * when that terminfo has setaf/setab parameterized RGB templates
+	 * AND advertises the RGB boolean -- ncurses validates
+	 * init_extended_pair()'s color arguments against COLORS using the
+	 * *loaded* terminfo, not any environment-variable heuristic, so
+	 * $COLORTERM=truecolor alone is not sufficient here even though
+	 * it's a reasonable signal in other contexts (e.g. nvim's own
+	 * truecolor auto-detection). Concretely this means det's host
+	 * $TERM needs to be a *-direct entry (foot-direct, st-direct,
+	 * xterm-direct, det-direct, ...) for this path to engage; plain
+	 * foot/st/xterm-256color will correctly fall through to the
+	 * indexed extended-color + OSC4 registration path further below,
+	 * which is slower but still correct.
+	 */
+	has_direct_color = (tigetflag("RGB") == 1);
 
 	/*
 	 * Reserve a dedicated block of pairs (and, on ext-colors builds, a
@@ -2185,8 +2400,11 @@ static void init_colors(void)
 
 	if (truecolor_cache_size > TRUECOLOR_PAIRS_MAX)
 		truecolor_cache_size = TRUECOLOR_PAIRS_MAX;
-	if (has_truecolor)
+	if (has_truecolor) {
 		memset(truecolor_cache, 0, sizeof truecolor_cache);
+		for (int i = 0; i < TRUECOLOR_HASH_SIZE; i++)
+			truecolor_hash_index[i] = -1;
+	}
 
 	if (COLORS) {
 		int dim = palette_hash_dim();
