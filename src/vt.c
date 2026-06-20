@@ -1220,6 +1220,41 @@ static void interpret_osc(Vt *t)
 			break;
 		case 1: /* icon name */
 			break;
+		case 10: /* query/set default foreground color */
+		case 11: /* query/set default background color */
+			if (data[1] == '?') {
+				/* query: reply with the color an empty/default
+				 * cell would actually render with, since apps
+				 * like nvim send this to decide light vs dark
+				 * background -- answering keeps that detection
+				 * fast instead of falling back to a timeout
+				 * (nvim's "ttyfast"/E1568 warning is exactly
+				 * this query going unanswered). */
+				short idx = (command == 10) ? t->deffg : t->defbg;
+				int32_t rgb;
+				if (idx == -1)
+					idx = (command == 10) ? default_fg : default_bg;
+				rgb = palette_to_rgb(idx);
+				if (rgb == -1)
+					rgb = (command == 10) ? 0xffffff : 0x000000;
+				char reply[32];
+				int len = snprintf(reply, sizeof reply,
+				                    "\033]%d;rgb:%02x%02x/%02x%02x/%02x%02xz",
+				                    command,
+				                    (int)((rgb >> 16) & 0xff), (int)((rgb >> 16) & 0xff),
+				                    (int)((rgb >> 8) & 0xff), (int)((rgb >> 8) & 0xff),
+				                    (int)(rgb & 0xff), (int)(rgb & 0xff));
+				if (len > 0 && (size_t)len < sizeof reply) {
+					reply[len - 1] = '\007'; /* terminate with BEL, the
+					                          * format most readers (incl.
+					                          * nvim) expect back */
+					vt_write(t, reply, len);
+				}
+			}
+			/* setting (data[1] != '?') is intentionally a no-op: det
+			 * doesn't currently support changing its own default
+			 * colors at runtime from inside a pane. */
+			break;
 		default:
 #ifndef NDEBUG
 			fprintf(stderr, "unknown OSC command: %d\n", command);
@@ -1596,13 +1631,20 @@ void vt_draw(Vt *t, WINDOW *win, int srow, int scol)
 					int32_t fg_rgb = cell->fg_rgb;
 					int32_t bg_rgb = cell->bg_rgb;
 					/* a side without a truecolor override still
-					 * needs an RGB value to pair against; derive
-					 * one from its palette index so e.g. a
-					 * truecolor fg over a default bg pairs
-					 * correctly instead of guessing black/white */
-					if (fg_rgb == -1)
+					 * needs an RGB value to pair against if it has
+					 * a real palette index (e.g. truecolor fg over
+					 * a 256-color bg) -- derive one so they pair
+					 * correctly. If the side has NO palette index
+					 * either (cell->fg/bg == -1, i.e. genuinely
+					 * transparent/terminal-default), leave it as
+					 * -1 and let vt_color_get_truecolor pass that
+					 * through to ncurses' own default-color
+					 * convention, rather than misreading -1 as a
+					 * literal RGB triple (which reads as opaque
+					 * white). */
+					if (fg_rgb == -1 && cell->fg != -1)
 						fg_rgb = palette_to_rgb(cell->fg);
-					if (bg_rgb == -1)
+					if (bg_rgb == -1 && cell->bg != -1)
 						bg_rgb = palette_to_rgb(cell->bg);
 					short pair = vt_color_get_truecolor(fg_rgb, bg_rgb);
 					if (pair > 0) {
@@ -1994,13 +2036,22 @@ static int32_t palette_to_rgb(short idx)
 /* allocate/recycle a curses color pair for a 24-bit RGB (fg, bg) combo.
  * Mirrors vt_color_get()'s recycling strategy, but keyed by packed RGB
  * rather than an 8-bit palette index, since RGB space can't be
- * enumerated into MAX_COLOR_PAIRS slots up front. -1 for fg_rgb/bg_rgb
- * means "no truecolor override, fall back to the palette color" and is
- * resolved by the caller before reaching here. */
+ * enumerated into MAX_COLOR_PAIRS slots up front.
+ *
+ * fg_rgb/bg_rgb of -1 means "use the terminal's default color" (e.g. a
+ * transparent background under a truecolor foreground) rather than a
+ * literal RGB value -- ncurses' use_default_colors()/-1 convention is
+ * honored here by passing -1 straight through to init_extended_pair()
+ * for that side instead of unpacking it as bytes, which would
+ * otherwise read as opaque white (0xffffff). */
 static short vt_color_get_truecolor(int32_t fg_rgb, int32_t bg_rgb)
 {
 	if (!has_truecolor || truecolor_pair_base == 0)
 		return 0;
+	if (fg_rgb == -1 && bg_rgb == -1)
+		return 0; /* nothing truecolor about this cell; let the caller use the palette path */
+	if (!has_default_colors && (fg_rgb == -1 || bg_rgb == -1))
+		return 0; /* terminal can't do default colors; caller must fall back */
 
 	for (int i = 0; i < truecolor_cache_size; i++) {
 		if (truecolor_cache[i].used && truecolor_cache[i].fg_rgb == fg_rgb
@@ -2032,25 +2083,39 @@ static short vt_color_get_truecolor(int32_t fg_rgb, int32_t bg_rgb)
 		return 0; /* shouldn't happen, but fail safe rather than corrupt */
 
 	short pair = truecolor_pair_base + slot;
-	int fr = (fg_rgb >> 16) & 0xff, fg_g = (fg_rgb >> 8) & 0xff, fb = fg_rgb & 0xff;
-	int br = (bg_rgb >> 16) & 0xff, bg_g = (bg_rgb >> 8) & 0xff, bb = bg_rgb & 0xff;
 
 #if defined(NCURSES_EXT_COLORS) && NCURSES_EXT_COLORS
 	/* each slot owns two dedicated extended-color indices for its
 	 * entire lifetime in the cache, so redefining them here can never
 	 * corrupt a different, still-displayed pair the way sharing a
-	 * small round-robin color range could. */
-	int fg_idx = truecolor_color_base + slot * 2;
-	int bg_idx = truecolor_color_base + slot * 2 + 1;
-	init_extended_color(fg_idx, rgb_channel_to_curses(fr),
-	                     rgb_channel_to_curses(fg_g), rgb_channel_to_curses(fb));
-	init_extended_color(bg_idx, rgb_channel_to_curses(br),
-	                     rgb_channel_to_curses(bg_g), rgb_channel_to_curses(bb));
+	 * small round-robin color range could. -1 on either side is passed
+	 * straight through as the *color index* (not an RGB triple) so
+	 * ncurses resolves it as the terminal default rather than us
+	 * misreading it as white. */
+	int fg_idx = -1, bg_idx = -1;
+	if (fg_rgb != -1) {
+		fg_idx = truecolor_color_base + slot * 2;
+		init_extended_color(fg_idx, rgb_channel_to_curses((fg_rgb >> 16) & 0xff),
+		                     rgb_channel_to_curses((fg_rgb >> 8) & 0xff),
+		                     rgb_channel_to_curses(fg_rgb & 0xff));
+	}
+	if (bg_rgb != -1) {
+		bg_idx = truecolor_color_base + slot * 2 + 1;
+		init_extended_color(bg_idx, rgb_channel_to_curses((bg_rgb >> 16) & 0xff),
+		                     rgb_channel_to_curses((bg_rgb >> 8) & 0xff),
+		                     rgb_channel_to_curses(bg_rgb & 0xff));
+	}
 	if (init_extended_pair(pair, fg_idx, bg_idx) != OK)
 		return 0;
 #else
-	short fg_idx = rgb_to_palette256(fr, fg_g, fb);
-	short bg_idx = rgb_to_palette256(br, bg_g, bb);
+	/* no ext-colors: degrade to nearest-256-color; ncurses' classic
+	 * init_pair() also accepts -1 for either side when
+	 * use_default_colors() succeeded, so this passes through the same
+	 * way. */
+	short fg_idx = (fg_rgb == -1) ? -1
+	             : rgb_to_palette256((fg_rgb >> 16) & 0xff, (fg_rgb >> 8) & 0xff, fg_rgb & 0xff);
+	short bg_idx = (bg_rgb == -1) ? -1
+	             : rgb_to_palette256((bg_rgb >> 16) & 0xff, (bg_rgb >> 8) & 0xff, bg_rgb & 0xff);
 	if (init_pair(pair, fg_idx, bg_idx) != OK)
 		return 0;
 #endif
