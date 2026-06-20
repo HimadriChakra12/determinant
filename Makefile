@@ -48,7 +48,7 @@ install: all
 		chmod 644 "${DESTDIR}${MANPREFIX}/man1/$$m"; \
 	done
 	@echo installing terminfo description
-	@TERMINFO=${TERMINFO} tic -s det.info
+	@TERMINFO=${TERMINFO} tic -x -s det.info
 
 uninstall:
 	@for b in ${BIN}; do \

@@ -87,12 +87,31 @@ static bool is_utf8, has_default_colors;
 static short color_pairs_reserved, color_pairs_max, color_pair_current;
 static short *color2palette, default_fg, default_bg;
 static char vt_term[32];
+static bool has_truecolor;
+
+/* truecolor (24-bit RGB) extended-pair cache, separate from the palette
+ * cache above: keyed by packed RGB rather than an 8-bit palette index,
+ * since 24-bit values can't be enumerated into MAX_COLOR_PAIRS slots. */
+#define TRUECOLOR_PAIRS_MAX 512
+typedef struct {
+	int32_t fg_rgb, bg_rgb; /* packed 0xRRGGBB, -1 = unset/use palette */
+	short pair;
+	bool used;
+} TruecolorPair;
+static TruecolorPair truecolor_cache[TRUECOLOR_PAIRS_MAX];
+static int truecolor_cache_next;
+static int truecolor_cache_size;  /* actual usable cache entries this run, <= TRUECOLOR_PAIRS_MAX */
+static int truecolor_cache_count; /* entries currently in use */
+static short truecolor_pair_base;  /* first pair index truecolor may use */
+static int truecolor_color_base;   /* first extended color index truecolor may use (ext-colors builds only) */
 
 typedef struct {
 	wchar_t text;
 	attr_t attr;
 	short fg;
 	short bg;
+	int32_t fg_rgb; /* packed 0xRRGGBB, -1 if this cell has no truecolor fg */
+	int32_t bg_rgb; /* packed 0xRRGGBB, -1 if this cell has no truecolor bg */
 } Cell;
 
 typedef struct {
@@ -163,6 +182,8 @@ typedef struct {
 	int curs_srow, curs_scol; /* saved cursor row/colmn (zero based) */
 	short curfg, curbg;    /* current fore and background colors */
 	short savfg, savbg;    /* saved colors */
+	int32_t curfg_rgb, curbg_rgb; /* current truecolor fg/bg, -1 if unset */
+	int32_t savfg_rgb, savbg_rgb; /* saved truecolor fg/bg */
 } Buffer;
 
 struct Vt {
@@ -254,6 +275,8 @@ static const char *keytable[KEY_MAX+1] = {
 static void puttab(Vt *t, int count);
 static void process_nonprinting(Vt *t, wchar_t wc);
 static void send_curs(Vt *t);
+static int32_t palette_to_rgb(short idx);
+static short vt_color_get_truecolor(int32_t fg_rgb, int32_t bg_rgb);
 
 __attribute__ ((const))
 static attr_t build_attrs(attr_t curattrs)
@@ -269,6 +292,8 @@ static void row_set(Row *row, int start, int len, Buffer *t)
 		.attr = t ? build_attrs(t->curattrs) : 0,
 		.fg = t ? t->curfg : -1,
 		.bg = t ? t->curbg : -1,
+		.fg_rgb = t ? t->curfg_rgb : -1,
+		.bg_rgb = t ? t->curbg_rgb : -1,
 	};
 
 	for (int i = start; i < len + start; i++)
@@ -301,6 +326,8 @@ static void buffer_clear(Buffer *b)
 		.attr = A_NORMAL,
 		.fg = -1,
 		.bg = -1,
+		.fg_rgb = -1,
+		.bg_rgb = -1,
 	};
 
 	for (int i = 0; i < b->rows; i++) {
@@ -441,6 +468,7 @@ static bool buffer_init(Buffer *b, int rows, int cols, int scroll_size)
 {
 	b->curattrs = A_NORMAL;	/* white text over black background */
 	b->curfg = b->curbg = -1;
+	b->curfg_rgb = b->curbg_rgb = -1;
 	if (scroll_size < 0)
 		scroll_size = 0;
 	if (scroll_size && !(b->scroll_buf = calloc(scroll_size, sizeof(Row))))
@@ -590,6 +618,8 @@ static void attributes_save(Vt *t)
 	b->savattrs = b->curattrs;
 	b->savfg = b->curfg;
 	b->savbg = b->curbg;
+	b->savfg_rgb = b->curfg_rgb;
+	b->savbg_rgb = b->curbg_rgb;
 	t->savgraphmode = t->graphmode;
 }
 
@@ -599,6 +629,8 @@ static void attributes_restore(Vt *t)
 	b->curattrs = b->savattrs;
 	b->curfg = b->savfg;
 	b->curbg = b->savbg;
+	b->curfg_rgb = b->savfg_rgb;
+	b->curbg_rgb = b->savbg_rgb;
 	t->graphmode = t->savgraphmode;
 }
 
@@ -631,6 +663,7 @@ static void interpret_csi_sgr(Vt *t, int param[], int pcount)
 		/* special case: reset attributes */
 		b->curattrs = A_NORMAL;
 		b->curfg = b->curbg = -1;
+		b->curfg_rgb = b->curbg_rgb = -1;
 		return;
 	}
 
@@ -639,6 +672,7 @@ static void interpret_csi_sgr(Vt *t, int param[], int pcount)
 		case 0:
 			b->curattrs = A_NORMAL;
 			b->curfg = b->curbg = -1;
+			b->curfg_rgb = b->curbg_rgb = -1;
 			break;
 		case 1:
 			b->curattrs |= A_BOLD;
@@ -685,33 +719,57 @@ static void interpret_csi_sgr(Vt *t, int param[], int pcount)
 			break;
 		case 30 ... 37:	/* fg */
 			b->curfg = param[i] - 30;
+			b->curfg_rgb = -1;
 			break;
 		case 38:
-			if ((i + 2) < pcount && param[i + 1] == 5) {
+			if ((i + 4) < pcount && param[i + 1] == 2) {
+				/* 38;2;r;g;b -- 24-bit truecolor foreground */
+				int r = param[i + 2] & 0xff;
+				int g = param[i + 3] & 0xff;
+				int bl = param[i + 4] & 0xff;
+				b->curfg_rgb = (r << 16) | (g << 8) | bl;
+				i += 4;
+			} else if ((i + 2) < pcount && param[i + 1] == 5) {
+				/* 38;5;n -- 256-color palette foreground */
 				b->curfg = param[i + 2];
+				b->curfg_rgb = -1;
 				i += 2;
 			}
 			break;
 		case 39:
 			b->curfg = -1;
+			b->curfg_rgb = -1;
 			break;
 		case 40 ... 47:	/* bg */
 			b->curbg = param[i] - 40;
+			b->curbg_rgb = -1;
 			break;
 		case 48:
-			if ((i + 2) < pcount && param[i + 1] == 5) {
+			if ((i + 4) < pcount && param[i + 1] == 2) {
+				/* 48;2;r;g;b -- 24-bit truecolor background */
+				int r = param[i + 2] & 0xff;
+				int g = param[i + 3] & 0xff;
+				int bl = param[i + 4] & 0xff;
+				b->curbg_rgb = (r << 16) | (g << 8) | bl;
+				i += 4;
+			} else if ((i + 2) < pcount && param[i + 1] == 5) {
+				/* 48;5;n -- 256-color palette background */
 				b->curbg = param[i + 2];
+				b->curbg_rgb = -1;
 				i += 2;
 			}
 			break;
 		case 49:
 			b->curbg = -1;
+			b->curbg_rgb = -1;
 			break;
 		case 90 ... 97:	/* hi fg */
 			b->curfg = param[i] - 82;
+			b->curfg_rgb = -1;
 			break;
 		case 100 ... 107: /* hi bg */
 			b->curbg = param[i] - 92;
+			b->curbg_rgb = -1;
 			break;
 		default:
 			break;
@@ -1372,7 +1430,7 @@ static void put_wc(Vt *t, wchar_t wc)
 			width = 1;
 		}
 		Buffer *b = t->buffer;
-		Cell blank_cell = { L'\0', build_attrs(b->curattrs), b->curfg, b->curbg };
+		Cell blank_cell = { L'\0', build_attrs(b->curattrs), b->curfg, b->curbg, b->curfg_rgb, b->curbg_rgb };
 		if (width == 2 && b->curs_col == b->cols - 1) {
 			b->curs_row->cells[b->curs_col++] = blank_cell;
 			b->curs_row->dirty = true;
@@ -1524,7 +1582,9 @@ void vt_draw(Vt *t, WINDOW *win, int srow, int scol)
 			cell = row->cells + j;
 			if (!prev_cell || cell->attr != prev_cell->attr
 			    || cell->fg != prev_cell->fg
-			    || cell->bg != prev_cell->bg) {
+			    || cell->bg != prev_cell->bg
+			    || cell->fg_rgb != prev_cell->fg_rgb
+			    || cell->bg_rgb != prev_cell->bg_rgb) {
 				if (cell->attr == A_NORMAL)
 					cell->attr = t->defattrs;
 				if (cell->fg == -1)
@@ -1532,7 +1592,27 @@ void vt_draw(Vt *t, WINDOW *win, int srow, int scol)
 				if (cell->bg == -1)
 					cell->bg = t->defbg;
 				wattrset(win, cell->attr << NCURSES_ATTR_SHIFT);
-				wcolor_set(win, vt_color_get(t, cell->fg, cell->bg), NULL);
+				if (cell->fg_rgb != -1 || cell->bg_rgb != -1) {
+					int32_t fg_rgb = cell->fg_rgb;
+					int32_t bg_rgb = cell->bg_rgb;
+					/* a side without a truecolor override still
+					 * needs an RGB value to pair against; derive
+					 * one from its palette index so e.g. a
+					 * truecolor fg over a default bg pairs
+					 * correctly instead of guessing black/white */
+					if (fg_rgb == -1)
+						fg_rgb = palette_to_rgb(cell->fg);
+					if (bg_rgb == -1)
+						bg_rgb = palette_to_rgb(cell->bg);
+					short pair = vt_color_get_truecolor(fg_rgb, bg_rgb);
+					if (pair > 0) {
+						wcolor_set(win, pair, NULL);
+					} else {
+						wcolor_set(win, vt_color_get(t, cell->fg, cell->bg), NULL);
+					}
+				} else {
+					wcolor_set(win, vt_color_get(t, cell->fg, cell->bg), NULL);
+				}
 			}
 
 			if (is_utf8 && cell->text >= 128) {
@@ -1763,13 +1843,34 @@ void vt_mouse(Vt *t, int x, int y, mmask_t mask)
 #endif /* NCURSES_MOUSE_VERSION */
 }
 
+/*
+ * Dimension used for the palette hash table below. curfg/curbg (see
+ * interpret_csi_sgr) only ever hold basic-16 or 256-palette indices --
+ * never raw truecolor RGB, which is carried separately in
+ * curfg_rgb/curbg_rgb and never touches this table -- so this only
+ * needs to cover the 256-color palette range regardless of how large
+ * COLORS is. Using raw COLORS here directly would overflow the
+ * (COLORS+2)*(COLORS+2) calloc size on 24-bit/truecolor terminals
+ * (COLORS=16777216), wrapping to a too-small allocation and corrupting
+ * memory the first time a real index near the true COLORS value was
+ * hashed.
+ */
+static int palette_hash_dim(void)
+{
+	int dim = COLORS;
+	if (dim > 256 || dim <= 0)
+		dim = 256;
+	return dim;
+}
+
 static unsigned int color_hash(short fg, short bg)
 {
-	if (fg == -1)
-		fg = COLORS;
-	if (bg == -1)
-		bg = COLORS + 1;
-	return fg * (COLORS + 2) + bg;
+	int dim = palette_hash_dim();
+	if (fg == -1 || fg >= dim)
+		fg = dim;
+	if (bg == -1 || bg >= dim)
+		bg = dim;
+	return fg * (dim + 2) + bg;
 }
 
 short vt_color_get(Vt *t, short fg, short bg)
@@ -1829,6 +1930,140 @@ short vt_color_reserve(short fg, short bg)
 	return color_pair >= 0 ? color_pair : -color_pair;
 }
 
+/* map an 8-bit RGB channel (0-255) onto curses' 0-1000 color scale */
+static int rgb_channel_to_curses(int c)
+{
+	return (c * 1000) / 255;
+}
+
+/* nearest xterm 256-color palette index for an RGB triple, used as a
+ * fallback on ncurses builds without extended-color/RGB support so
+ * truecolor sequences still degrade to a close palette match instead
+ * of being dropped. */
+static short rgb_to_palette256(int r, int g, int b)
+{
+	/* 6x6x6 color cube (indices 16-231) */
+	int qr = (r * 5) / 255, qg = (g * 5) / 255, qb = (b * 5) / 255;
+	int cube_idx = 16 + 36 * qr + 6 * qg + qb;
+	static const int levels[6] = { 0, 95, 135, 175, 215, 255 };
+	int cr = levels[qr], cg = levels[qg], cb = levels[qb];
+	int cube_dist = (r - cr) * (r - cr) + (g - cg) * (g - cg) + (b - cb) * (b - cb);
+
+	/* grayscale ramp (indices 232-255) */
+	int gray = (r + g + b) / 3;
+	int gray_idx = gray < 8 ? 0 : (gray > 238 ? 23 : (gray - 8) / 10);
+	int gv = 8 + gray_idx * 10;
+	int gray_dist = (r - gv) * (r - gv) + (g - gv) * (g - gv) + (b - gv) * (b - gv);
+
+	if (gray_dist < cube_dist)
+		return 232 + gray_idx;
+	return cube_idx;
+}
+
+/* approximate RGB for a curses palette index, used when only one side
+ * of an (fg, bg) pair has an explicit truecolor override -- lets that
+ * side still pair correctly against the other's palette color instead
+ * of guessing. -1/unset palette index maps to -1 (caller's default). */
+static int32_t palette_to_rgb(short idx)
+{
+	static const int32_t ansi16[16] = {
+		0x000000, 0x800000, 0x008000, 0x808000,
+		0x000080, 0x800080, 0x008080, 0xc0c0c0,
+		0x808080, 0xff0000, 0x00ff00, 0xffff00,
+		0x0000ff, 0xff00ff, 0x00ffff, 0xffffff,
+	};
+	if (idx < 0)
+		return -1;
+	if (idx < 16)
+		return ansi16[idx];
+	if (idx < 232) {
+		static const int levels[6] = { 0, 95, 135, 175, 215, 255 };
+		int i = idx - 16;
+		int r = levels[(i / 36) % 6];
+		int g = levels[(i / 6) % 6];
+		int b = levels[i % 6];
+		return (r << 16) | (g << 8) | b;
+	}
+	if (idx < 256) {
+		int v = 8 + (idx - 232) * 10;
+		return (v << 16) | (v << 8) | v;
+	}
+	return -1;
+}
+
+/* allocate/recycle a curses color pair for a 24-bit RGB (fg, bg) combo.
+ * Mirrors vt_color_get()'s recycling strategy, but keyed by packed RGB
+ * rather than an 8-bit palette index, since RGB space can't be
+ * enumerated into MAX_COLOR_PAIRS slots up front. -1 for fg_rgb/bg_rgb
+ * means "no truecolor override, fall back to the palette color" and is
+ * resolved by the caller before reaching here. */
+static short vt_color_get_truecolor(int32_t fg_rgb, int32_t bg_rgb)
+{
+	if (!has_truecolor || truecolor_pair_base == 0)
+		return 0;
+
+	for (int i = 0; i < truecolor_cache_size; i++) {
+		if (truecolor_cache[i].used && truecolor_cache[i].fg_rgb == fg_rgb
+		    && truecolor_cache[i].bg_rgb == bg_rgb)
+			return truecolor_cache[i].pair;
+	}
+
+	if (truecolor_cache_count >= truecolor_cache_size) {
+		/* out of reserved pairs/colors: evict the oldest entry rather
+		 * than reuse a slot whose *color* definition (not just its
+		 * pair) might still be referenced by another live, cached
+		 * pair -- each cache slot owns its own dedicated pair+color
+		 * indices for its whole lifetime, so eviction here only ever
+		 * frees a slot that's no longer pointed at by this cache. */
+		int slot = truecolor_cache_next;
+		truecolor_cache_next = (truecolor_cache_next + 1) % truecolor_cache_size;
+		truecolor_cache[slot].used = false;
+	}
+
+	/* find a free slot (there's guaranteed to be one after the evict above) */
+	int slot = -1;
+	for (int i = 0; i < truecolor_cache_size; i++) {
+		if (!truecolor_cache[i].used) {
+			slot = i;
+			break;
+		}
+	}
+	if (slot < 0)
+		return 0; /* shouldn't happen, but fail safe rather than corrupt */
+
+	short pair = truecolor_pair_base + slot;
+	int fr = (fg_rgb >> 16) & 0xff, fg_g = (fg_rgb >> 8) & 0xff, fb = fg_rgb & 0xff;
+	int br = (bg_rgb >> 16) & 0xff, bg_g = (bg_rgb >> 8) & 0xff, bb = bg_rgb & 0xff;
+
+#if defined(NCURSES_EXT_COLORS) && NCURSES_EXT_COLORS
+	/* each slot owns two dedicated extended-color indices for its
+	 * entire lifetime in the cache, so redefining them here can never
+	 * corrupt a different, still-displayed pair the way sharing a
+	 * small round-robin color range could. */
+	int fg_idx = truecolor_color_base + slot * 2;
+	int bg_idx = truecolor_color_base + slot * 2 + 1;
+	init_extended_color(fg_idx, rgb_channel_to_curses(fr),
+	                     rgb_channel_to_curses(fg_g), rgb_channel_to_curses(fb));
+	init_extended_color(bg_idx, rgb_channel_to_curses(br),
+	                     rgb_channel_to_curses(bg_g), rgb_channel_to_curses(bb));
+	if (init_extended_pair(pair, fg_idx, bg_idx) != OK)
+		return 0;
+#else
+	short fg_idx = rgb_to_palette256(fr, fg_g, fb);
+	short bg_idx = rgb_to_palette256(br, bg_g, bb);
+	if (init_pair(pair, fg_idx, bg_idx) != OK)
+		return 0;
+#endif
+
+	truecolor_cache[slot].fg_rgb = fg_rgb;
+	truecolor_cache[slot].bg_rgb = bg_rgb;
+	truecolor_cache[slot].pair = pair;
+	truecolor_cache[slot].used = true;
+	if (truecolor_cache_count < truecolor_cache_size)
+		truecolor_cache_count++;
+	return pair;
+}
+
 static void init_colors(void)
 {
 	pair_content(0, &default_fg, &default_bg);
@@ -1838,8 +2073,60 @@ static void init_colors(void)
 		default_bg = COLOR_BLACK;
 	has_default_colors = (use_default_colors() == OK);
 	color_pairs_max = MIN(MAX_COLOR_PAIRS, SHRT_MAX);
-	if (COLORS)
-		color2palette = calloc((COLORS + 2) * (COLORS + 2), sizeof(short));
+
+	/*
+	 * Reserve a dedicated block of pairs (and, on ext-colors builds, a
+	 * matching block of color indices) for truecolor use, carved out of
+	 * the same capped pair pool the palette allocator below uses --
+	 * COLOR_PAIRS/MAX_COLOR_PAIRS is itself capped at SHRT_MAX (32767
+	 * here), so there's no headroom *beyond* color_pairs_max to claim;
+	 * the reserve has to come out of it instead.
+	 */
+	has_truecolor = false;
+	truecolor_pair_base = 0;
+	truecolor_color_base = 0;
+	truecolor_cache_size = 0;
+	truecolor_cache_count = 0;
+	truecolor_cache_next = 0;
+
+#if defined(NCURSES_EXT_COLORS) && NCURSES_EXT_COLORS
+	long color_headroom = (long)COLORS - 16; /* leave the base 16 ANSI slots alone */
+	long want = TRUECOLOR_PAIRS_MAX;
+	if (color_headroom / 2 < want)
+		want = color_headroom / 2;
+	if (want > color_pairs_max / 4) /* never take more than a quarter of pair space */
+		want = color_pairs_max / 4;
+	if (want > 0 && color_pairs_max > want) {
+		has_truecolor = true;
+		truecolor_pair_base = color_pairs_max - want;
+		truecolor_color_base = 16;
+		truecolor_cache_size = (int)want;
+		color_pairs_max -= want; /* keep the palette allocator out of this range */
+	}
+#else
+	/* no ext-colors: truecolor degrades to nearest-256-color via the
+	 * normal init_pair() path, so this just needs spare *pairs*, not
+	 * spare *colors*. */
+	long pair_reserve = color_pairs_max / 4;
+	if (pair_reserve > TRUECOLOR_PAIRS_MAX)
+		pair_reserve = TRUECOLOR_PAIRS_MAX;
+	if (pair_reserve > 0 && color_pairs_max > pair_reserve) {
+		has_truecolor = true;
+		truecolor_pair_base = color_pairs_max - pair_reserve;
+		truecolor_cache_size = (int)pair_reserve;
+		color_pairs_max -= pair_reserve;
+	}
+#endif
+
+	if (truecolor_cache_size > TRUECOLOR_PAIRS_MAX)
+		truecolor_cache_size = TRUECOLOR_PAIRS_MAX;
+	if (has_truecolor)
+		memset(truecolor_cache, 0, sizeof truecolor_cache);
+
+	if (COLORS) {
+		int dim = palette_hash_dim();
+		color2palette = calloc((dim + 2) * (dim + 2), sizeof(short));
+	}
 	/*
 	 * XXX: On undefined color-pairs NetBSD curses pair_content() set fg
 	 *      and bg to default colors while ncurses set them respectively to
@@ -1855,10 +2142,15 @@ void vt_init(void)
 {
 	init_colors();
 	is_utf8_locale();
-	char *term = getenv("DVTM_TERM");
+	char *term = getenv("DET_TERM");
 	if (!term)
-		term = "dvtm";
-	snprintf(vt_term, sizeof vt_term, "%s%s", term, COLORS >= 256 ? "-256color" : "");
+		term = getenv("DVTM_TERM"); /* back-compat with upstream dvtm */
+	if (!term)
+		term = "det";
+	const char *suffix = "";
+	if (COLORS >= 256)
+		suffix = has_truecolor ? "-direct" : "-256color";
+	snprintf(vt_term, sizeof vt_term, "%s%s", term, suffix);
 }
 
 void vt_keytable_set(const char * const keytable_overlay[], int count)
@@ -1909,7 +2201,7 @@ size_t vt_content_get(Vt *t, char **buf, bool colored)
 {
 	Buffer *b = t->buffer;
 	int lines = b->scroll_above + b->scroll_below + b->rows + 1;
-	size_t size = lines * ((b->cols + 1) * ((colored ? 64 : 0) + MB_CUR_MAX));
+	size_t size = lines * ((b->cols + 1) * ((colored ? 96 : 0) + MB_CUR_MAX));
 	mbstate_t ps;
 	memset(&ps, 0, sizeof(ps));
 
@@ -1938,16 +2230,28 @@ size_t vt_content_get(Vt *t, char **buf, bool colored)
 					if (esclen > 0)
 						s += esclen;
 				}
-				if (!prev_cell || cell->fg != prev_cell->fg || cell->attr != prev_cell->attr) {
-					if (cell->fg == -1)
+				if (!prev_cell || cell->fg != prev_cell->fg || cell->fg_rgb != prev_cell->fg_rgb
+				    || cell->attr != prev_cell->attr) {
+					if (cell->fg_rgb != -1) {
+						int r = (cell->fg_rgb >> 16) & 0xff;
+						int g = (cell->fg_rgb >> 8) & 0xff;
+						int bl = cell->fg_rgb & 0xff;
+						esclen = sprintf(s, "\033[38;2;%d;%d;%dm", r, g, bl);
+					} else if (cell->fg == -1)
 						esclen = sprintf(s, "\033[39m");
 					else
 						esclen = sprintf(s, "\033[38;5;%dm", cell->fg);
 					if (esclen > 0)
 						s += esclen;
 				}
-				if (!prev_cell || cell->bg != prev_cell->bg || cell->attr != prev_cell->attr) {
-					if (cell->bg == -1)
+				if (!prev_cell || cell->bg != prev_cell->bg || cell->bg_rgb != prev_cell->bg_rgb
+				    || cell->attr != prev_cell->attr) {
+					if (cell->bg_rgb != -1) {
+						int r = (cell->bg_rgb >> 16) & 0xff;
+						int g = (cell->bg_rgb >> 8) & 0xff;
+						int bl = cell->bg_rgb & 0xff;
+						esclen = sprintf(s, "\033[48;2;%d;%d;%dm", r, g, bl);
+					} else if (cell->bg == -1)
 						esclen = sprintf(s, "\033[49m");
 					else
 						esclen = sprintf(s, "\033[48;5;%dm", cell->bg);
