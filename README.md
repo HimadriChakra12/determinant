@@ -7,6 +7,10 @@ of tiling window management. It fixes
 2. Fixed DSR that glitches the cursor position(e.g. lazygit quit).
 3. A color patch.
 
+## TODO
+
+1. A More Customizable Status Bar
+
 ## Download
 
 Either Download the latest [source tarball](https://github.com/martanne/dvtm/releases),
@@ -39,15 +43,15 @@ simple and therefore easy to hack on.
 
 ## Quickstart
 
-All of dvtm keybindings start with a common modifier which from now
-on is refered to as `MOD`. By default `MOD` is set to `CTRL+g` however
+All of `det` keybindings start with a common modifier which from now
+on is refered to as `MOD`. By default `MOD` is set to `CTRL+c` however
 this can be changed at runttime with the `-m` command line option.
 For example setting `MOD` to `CTRL-b` is accomplished by starting
-`dvtm -m ^b`.
+`det -m ^b`.
 
 ### Windows
 
-New windows are created with `MOD+c` and closed with `MOD+x`.
+New windows are created with `MOD+n` and closed with `MOD+x`.
 To switch among the windows use `MOD+j` and `MOD+k` or `MOD+[1..9]`
 where the digit corresponds to the window number which is displayed
 in the title bar. Windows can be minimized and restored with `MOD+.`.
@@ -73,7 +77,7 @@ through via `MOD+Space`
  * bottom stack: master area on the top half, other clients stacked below
  * grid: every window gets an equally sized portion of the screen
  * fullscreen: only the selected window is shown and occupies the
-   whole available display area `MOD+m`
+   whole available display area `MOD+f`
 
 Further layouts are included in the source tarball but disabled by
 default.
@@ -96,13 +100,13 @@ bindings are used to manipulate the tagsets.
 
 dvtm can be instructed to read and display status messages from a named
 pipe. As an example the
-[`dvtm-status` script](https://raw.githubusercontent.com/martanne/dvtm/master/dvtm-status)
+[`det-status` script](https://raw.githubusercontent.com/martanne/dvtm/master/dvtm-status)
 is provided which shows the current time.
 
 ### Copymode ###
 
 `MOD+e` pipes the whole scroll buffer content to an external editor.
-What ever the editor writes to `stdout` is remembered by dvtm and can
+What ever the editor writes to `stdout` is remembered by det and can
 later be pasted with `MOD+p`.
 
 In order for this to work the editor needs to be usable as a filter
@@ -121,45 +125,23 @@ behaviour:
 
 ## FAQ
 
-### Detach / reattach functionality
-
-dvtm doesn't have session support built in. Use
-[abduco](https://www.brain-dump.org/projects/abduco/) instead.
-
-    $ abduco -c dvtm-session
-
-Detach using `CTRL-\` and later reattach with
-
-    $ abduco -a dvtm-session
-
-### Copy / Paste does not work under X
-
-If you have mouse support enabled, which is the case with the
-default settings, you need to hold down shift while selecting
-and inserting text. In case you don't like this behaviour either
-run dvtm with the `-M` command line argument, disable it at run
-time with `MOD+M` or modify `config.def.h` to disable it completely
-at compile time. You will however no longer be able to perform
-other mouse actions like selecting windows etc.
-
 ### How to change the key bindings?
 
-The configuration of dvtm is done by creating a custom `config.h`
-and (re)compiling the source code. See the default `config.def.h`
-as an example, adapting it to your preference should be straightforward.
+The configuration of det is done by creating a custom `config.h`
+and (re)compiling the source code.
 You basically define a set of layouts and keys which dvtm will use.
 There are some pre defined macros to ease configuration.
 
 ### WARNING: terminal is not fully functional
 
-This means you haven't installed the `dvtm.info` terminfo description
-which can be done with `tic -s dvtm.info`. If for some reason you
-can't install new terminfo descriptions set the `DVTM_TERM` environment
-variable to a known terminal when starting `dvtm` as in
+This means you haven't installed the `det.info` terminfo description
+which can be done with `tic -s det.info`. If for some reason you
+can't install new terminfo descriptions set the `det_TERM` environment
+variable to a known terminal when starting `det` as in
 
-    $ DVTM_TERM=rxvt dvtm
+    $ det_TERM=rxvt det
 
-This will instruct dvtm to use rxvt as `$TERM` value within its windows.
+This will instruct det to use rxvt as `$TERM` value within its windows.
 
 ### How to set the window title?
 
@@ -175,7 +157,7 @@ the following section in your startup files.
 
     # If this is an xterm set the title to user@host:dir
     case "$TERM" in
-    dvtm*|xterm*|rxvt*)
+    det*|xterm*|rxvt*)
         PROMPT_COMMAND='echo -ne "\033]0;${USER}@${HOSTNAME}: ${PWD/$HOME/~}\007"'
         ;;
     *)
@@ -202,7 +184,7 @@ library to 6 (i.e. you have to link against `libncursesw.so.6`).
 
 ### Some characters are displayed like garbage
 
-Make sure you compiled dvtm against a unicode aware curses library
+Make sure you compiled det against a unicode aware curses library
 (in case of ncurses this would be `libncursesw`). Also make sure
 that your locale settings contain UTF-8.
 
@@ -218,19 +200,8 @@ You have to tell Putty in which
 the received data is. Set the dropdown box under `Window => Translation`
 to UTF-8. In order to get proper line drawing characters you proabably
 also want to set the TERM environment variable to `putty` or `putty-256color`.
-If that still doesn't do the trick then try running dvtm with the
+If that still doesn't do the trick then try running det with the
 following ncurses related environment variable set `NCURSES_NO_UTF8_ACS=1`.
-
-## Development
-
-You can always fetch the current code base from the git repository
-located at [Github](https://github.com/martanne/dvtm/) or
-[Sourcehut](https://git.sr.ht/~martanne/dvtm).
-
-If you have comments, suggestions, ideas, a bug report, a patch or
-something else related to dvtm then write to the
-[suckless developer mailing list](https://suckless.org/community)
-or contact me directly.
 
 ## License
 
