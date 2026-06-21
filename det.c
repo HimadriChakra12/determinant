@@ -38,6 +38,41 @@
 #endif
 #include "src/vt.h"
 
+/*
+ * Lightweight profiling, enabled only with DET_PROFILE=1 in the
+ * environment. Logs to /tmp/det_profile.log any single step in the
+ * main loop that took longer than PROFILE_THRESHOLD_MS, so real
+ * interactive usage (nvim, lazygit, etc) can be profiled without
+ * flooding the log with noise from the many fast iterations that
+ * happen during normal operation.
+ */
+#define PROFILE_THRESHOLD_MS 4.0
+
+static double
+profile_now(void) {
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return tv.tv_sec + tv.tv_usec / 1e6;
+}
+
+static void
+profile_log(const char *label, double elapsed_ms, int extra) {
+	static FILE *dbg = NULL;
+	static bool checked_env = false, enabled = false;
+	if (!checked_env) {
+		enabled = getenv("DET_PROFILE") != NULL;
+		checked_env = true;
+	}
+	if (!enabled || elapsed_ms < PROFILE_THRESHOLD_MS)
+		return;
+	if (!dbg)
+		dbg = fopen("/tmp/det_profile.log", "a");
+	if (dbg) {
+		fprintf(dbg, "%.3f ms  %-20s  extra=%d\n", elapsed_ms, label, extra);
+		fflush(dbg);
+	}
+}
+
 #ifdef PDCURSES
 int ESCDELAY;
 #endif
@@ -243,6 +278,28 @@ static unsigned int seltags;
 static unsigned int tagset[2] = { 1, 1 };
 static bool mouse_events_enabled = ENABLE_MOUSE;
 static Layout *layout = layouts;
+
+/*
+ * Tracks what det last told its own host terminal about bracketed
+ * paste mode: -1 = nothing relayed yet, 0 = told host it's off,
+ * 1 = told host it's on. Single source of truth shared between
+ * focus() (relay on pane switch) and the main loop (relay on a live
+ * mode change from the still-focused pane), so the two call sites
+ * can't independently re-emit or miss a transition by tracking this
+ * separately. See relay_pastemode() and its callers for why this
+ * exists at all.
+ */
+static int last_relayed_pastemode = -1;
+
+static void
+relay_pastemode(Client *c) {
+	int wants = (c && vt_pastemode_get(c->term)) ? 1 : 0;
+	if (wants == last_relayed_pastemode)
+		return;
+	printf(wants ? "\033[?2004h" : "\033[?2004l");
+	fflush(stdout);
+	last_relayed_pastemode = wants;
+}
 static StatusBar bar = { .fd = -1, .lastpos = BAR_POS, .pos = BAR_POS, .autohide = BAR_AUTOHIDE, .h = 1 };
 static CmdFifo cmdfifo = { .fd = -1 };
 static const char *shell;
@@ -606,6 +663,26 @@ focus(Client *c) {
 		}
 	}
 	curs_set(c && !c->minimized && vt_cursor_visible(c->term));
+
+	/*
+	 * Relay the newly-focused pane's bracketed-paste-mode request to
+	 * det's own host terminal (foot, st, etc). Each pane's child
+	 * program (nvim, by default) tracks this independently via the
+	 * normal \e[?2004h/l it sends to its own pty, which det parses
+	 * and records per-Vt (see vt_pastemode_get) -- but det never
+	 * forwarded that request *outward* to its own stdout, so the host
+	 * terminal never found out a pane wanted bracketed paste at all.
+	 * That meant a host-level paste (e.g. foot's Ctrl+Shift+V/paste
+	 * keybinding) was never wrapped in \e[200~ ... \e[201~, so nvim
+	 * couldn't tell the incoming text was a paste rather than typed
+	 * input -- triggering auto-indent on every pasted line, which is
+	 * the indentation corruption this fixes. Re-asserted on every
+	 * focus change since each pane's request is independent: a pane
+	 * that never asked for bracketed paste should not leave it
+	 * enabled at the host level after you switch away from a pane
+	 * that did.
+	 */
+	relay_pastemode(c);
 }
 
 static void
@@ -1304,8 +1381,26 @@ killclient(const char *args[]) {
 
 static void
 paste(const char *args[]) {
-	if (sel && copyreg.data)
-		vt_write(sel->term, copyreg.data, copyreg.len);
+	if (sel && copyreg.data) {
+		/*
+		 * If the focused pane's program asked for bracketed paste
+		 * (CSI ?2004h -- nvim does this by default), wrap the
+		 * pasted content in \e[200~ ... \e[201~ so it can tell this
+		 * is a paste rather than someone typing every character and
+		 * pressing enter after each line. Without this, paste-back
+		 * inside nvim triggers auto-indent on every pasted line,
+		 * which is exactly the indentation corruption this fixes --
+		 * det was writing the raw register straight into the pty
+		 * with no paste markers at all.
+		 */
+		if (vt_pastemode_get(sel->term)) {
+			vt_write(sel->term, "\033[200~", 6);
+			vt_write(sel->term, copyreg.data, copyreg.len);
+			vt_write(sel->term, "\033[201~", 6);
+		} else {
+			vt_write(sel->term, copyreg.data, copyreg.len);
+		}
+	}
 }
 
 static void
@@ -1876,7 +1971,11 @@ main(int argc, char *argv[]) {
 			c = c->next;
 		}
 
-		doupdate();
+		{
+			double _t0 = profile_now();
+			doupdate();
+			profile_log("doupdate", (profile_now() - _t0) * 1000, 0);
+		}
 		r = pselect(nfds + 1, &rd, NULL, NULL, NULL, &emptyset);
 
 		if (r < 0) {
@@ -1924,25 +2023,39 @@ main(int argc, char *argv[]) {
 
 		for (Client *c = clients; c; c = c->next) {
 			if (FD_ISSET(vt_pty_get(c->term), &rd)) {
-				if (vt_process(c->term) < 0 && errno == EIO) {
+				double _t0 = profile_now();
+				int vtres = vt_process(c->term);
+				profile_log("vt_process", (profile_now() - _t0) * 1000, c->order);
+				if (vtres < 0 && errno == EIO) {
 					if (c->editor)
 						c->editor_died = true;
 					else
 						c->died = true;
 					continue;
 				}
+				if (c == sel) {
+					/* relay a live bracketed-paste-mode change from
+					 * the focused pane to the host terminal right
+					 * away, not just on the next focus switch (see
+					 * focus() for the full explanation). */
+					relay_pastemode(c);
+				}
 			}
 
 			if (c != sel && is_content_visible(c)) {
+				double _t0 = profile_now();
 				draw_content(c);
 				wnoutrefresh(c->window);
+				profile_log("draw_content(unfocused)", (profile_now() - _t0) * 1000, c->order);
 			}
 		}
 
 		if (is_content_visible(sel)) {
+			double _t0 = profile_now();
 			draw_content(sel);
 			curs_set(vt_cursor_visible(sel->term));
 			wnoutrefresh(sel->window);
+			profile_log("draw_content(focused)", (profile_now() - _t0) * 1000, sel->order);
 		}
 	}
 

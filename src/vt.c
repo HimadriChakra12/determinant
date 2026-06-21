@@ -301,6 +301,7 @@ struct Vt {
 	unsigned bell:1;
 	unsigned relposmode:1;
 	unsigned mousetrack:1;
+	unsigned pastemode:1; /* bracketed paste mode (CSI ?2004h/l) requested by the child */
 	unsigned graphmode:1;
 	unsigned savgraphmode:1;
 	bool charsets[2];
@@ -1122,15 +1123,43 @@ static void interpret_csi_priv_mode(Vt *t, int param[], int pcount, bool set)
 			t->curshid = !set;
 			break;
 		case 1049: /* combine 1047 + 1048 */
+			/*
+			 * Save/restore the cursor position against whichever
+			 * buffer is current *before* switching buffers below,
+			 * matching mtm's ordering (mtm.c's `mode` handler calls
+			 * sc/rc, THEN falls through to the buffer switch).
+			 * cursor_save()/cursor_restore() both read/write
+			 * t->buffer's own curs_srow/curs_scol -- buffer_normal
+			 * and buffer_alternate each have independent copies of
+			 * that field -- so doing the buffer switch first (the
+			 * previous order here) meant:
+			 *   enter (?1049h): switch to alternate, THEN save --
+			 *     saves into buffer_alternate's slot, not normal's.
+			 *   exit  (?1049l): switch to normal, THEN restore --
+			 *     restores from buffer_normal's slot, which was
+			 *     never written, instead of the position actually
+			 *     saved on entry.
+			 * The net effect: returning from any alternate-screen
+			 * program (lazygit, nvim, etc) could leave the cursor
+			 * at a stale/garbage row in the now-current normal
+			 * buffer, which is exactly the kind of thing that reads
+			 * as "the shell looks glitched" right after quitting
+			 * such a program -- the next prompt draws starting from
+			 * wherever that garbage cursor position was, not from
+			 * where the shell actually left off.
+			 */
+			if (set)
+				cursor_save(t);
+			else
+				cursor_restore(t);
+			/* fall through */
 		case 47:   /* use alternate/normal screen buffer */
 		case 1047:
 			if (!set)
 				buffer_clear(&t->buffer_alternate);
 			t->buffer = set ? &t->buffer_alternate : &t->buffer_normal;
 			vt_dirty(t);
-			if (param[i] != 1049)
-				break;
-			/* fall through */
+			break;
 		case 1048: /* save/restore cursor */
 			if (set)
 				cursor_save(t);
@@ -1139,6 +1168,17 @@ static void interpret_csi_priv_mode(Vt *t, int param[], int pcount, bool set)
 			break;
 		case 1000: /* enable/disable normal mouse tracking */
 			t->mousetrack = set;
+			break;
+		case 2004: /* bracketed paste mode -- tracked so paste() in
+		            * det.c knows whether to wrap pasted text in
+		            * \e[200~ ... \e[201~. Without this, a program
+		            * that requested bracketed paste (nvim does, by
+		            * default) can't tell a multi-line paste from
+		            * someone actually typing every character and
+		            * pressing enter after each line -- which is
+		            * exactly what causes auto-indent to fire on every
+		            * line of pasted text, compounding indentation. */
+			t->pastemode = set;
 			break;
 		}
 	}
@@ -1989,8 +2029,14 @@ ssize_t vt_write(Vt *t, const char *buf, size_t len)
 static void send_curs(Vt *t)
 {
 	Buffer *b = t->buffer;
-	char keyseq[16];
-	snprintf(keyseq, sizeof keyseq, "\e[%d;%dR", (int)(b->curs_row - b->lines), b->curs_col);
+	char keyseq[32];
+	/* DSR cursor-position replies are 1-indexed (row 1 = top-left) per
+	 * spec, matching the CUP (\e[row;colH) sequence's own indexing --
+	 * but curs_row/curs_col are stored 0-indexed internally, so they
+	 * need the same +1 conversion CUP's own handler applies when
+	 * *receiving* a position, just in the other direction here. */
+	snprintf(keyseq, sizeof keyseq, "\e[%d;%dR",
+	         (int)(b->curs_row - b->lines) + 1, b->curs_col + 1);
 	vt_write(t, keyseq, strlen(keyseq));
 }
 
@@ -2473,6 +2519,11 @@ void *vt_data_get(Vt *t)
 bool vt_cursor_visible(Vt *t)
 {
 	return t->buffer->scroll_below ? false : !t->curshid;
+}
+
+bool vt_pastemode_get(Vt *t)
+{
+	return t->pastemode;
 }
 
 pid_t vt_pid_get(Vt *t)

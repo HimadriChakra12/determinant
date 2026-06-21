@@ -46,6 +46,7 @@ void vt_destroy(Vt*);
 pid_t vt_forkpty(Vt*, const char *p, const char *argv[], const char *cwd, const char *env[], int *to, int *from);
 int vt_pty_get(Vt*);
 bool vt_cursor_visible(Vt*);
+bool vt_pastemode_get(Vt*);
 
 int vt_process(Vt *);
 void vt_keypress(Vt *, int keycode);
