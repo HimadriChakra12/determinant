@@ -58,7 +58,7 @@ static Color colors[] = {
 /* curses attributes for not selected tags which with urgent windows */
 #define TAG_URGENT (COLOR(BLUE) | A_NORMAL | A_BLINK)
 
-const char tags[][8] = { "one", "two", "three" };
+const char tags[][8] = { "one", "two", "three", "four", "five", "six", "seven", "eight", "nine" };
 
 #include "src/layout/tile.c"
 #include "src/layout/grid.c"

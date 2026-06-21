@@ -1,53 +1,11 @@
 # dvtm - dynamic virtual terminal manager
 
-[dvtm](https://www.brain-dump.org/projects/dvtm/) brings the concept
-of tiling window management, popularized by X11-window managers like
-[dwm](https://dwm.suckless.org) to the console. As a console window
-manager it tries to make it easy to work with multiple console based
-programs.
+`det`, a better fork  of [dvtm](https://www.brain-dump.org/projects/dvtm/), brings the concept
+of tiling window management. It fixes 
 
-![abduco+dvtm demo](https://raw.githubusercontent.com/martanne/dvtm/gh-pages/screencast.gif#center)
-
-## News
-
-- [dvtm-0.15](https://www.brain-dump.org/projects/dvtm/dvtm-0.15.tar.gz)
-  [released](https://lists.suckless.org/dev/1601/28095.html) (09.01.2016)
-- [dvtm-0.14](https://www.brain-dump.org/projects/dvtm/dvtm-0.14.tar.gz)
-  [released](https://lists.suckless.org/dev/1502/25558.html) (19.02.2015)
-- [dvtm-0.13](https://www.brain-dump.org/projects/dvtm/dvtm-0.13.tar.gz)
-  [released](https://lists.suckless.org/dev/1411/24449.html) (15.11.2014)
-- [dvtm-0.12](https://www.brain-dump.org/projects/dvtm/dvtm-0.12.tar.gz)
-  [released](https://lists.suckless.org/dev/1407/22702.html) (05.07.2014)
-- [dvtm-0.11](https://www.brain-dump.org/projects/dvtm/dvtm-0.11.tar.gz)
-  [released](https://lists.suckless.org/dev/1403/20371.html) (08.03.2014)
-- [dvtm-0.10](https://www.brain-dump.org/projects/dvtm/dvtm-0.10.tar.gz)
-  [released](https://lists.suckless.org/dev/1312/18805.html) (28.12.2013)
-- [dvtm-0.9](https://www.brain-dump.org/projects/dvtm/dvtm-0.9.tar.gz)
-  [released](https://lists.suckless.org/dev/1304/15112.html) (3.04.2013)
-- [dvtm-0.8](https://www.brain-dump.org/projects/dvtm/dvtm-0.8.tar.gz)
-  [released](https://lists.suckless.org/dev/1208/12004.html) (1.08.2012)
-- [dvtm-0.7](https://www.brain-dump.org/projects/dvtm/dvtm-0.7.tar.gz)
-  [released](https://lists.suckless.org/dev/1109/9266.html) (4.09.2011)
-- [dvtm-0.6](https://www.brain-dump.org/projects/dvtm/dvtm-0.6.tar.gz)
-  [released](https://lists.suckless.org/dev/1010/6146.html) (8.10.2010)
-- [dvtm-0.5.2](https://www.brain-dump.org/projects/dvtm/dvtm-0.5.2.tar.gz)
-  [released](https://lists.suckless.org/dev/0907/0520.html) (7.07.2009)
-- [dvtm-0.5.1](https://www.brain-dump.org/projects/dvtm/dvtm-0.5.1.tar.gz)
-  [released](https://lists.suckless.org/dwm/0902/7405.html) (8.02.2009)
-- [dvtm-0.5](https://www.brain-dump.org/projects/dvtm/dvtm-0.5.tar.gz)
-  [released](https://lists.suckless.org/dwm/0901/7354.html) (26.01.2009)
-- [dvtm-0.4.1](https://www.brain-dump.org/projects/dvtm/dvtm-0.4.1.tar.gz)
-  [released](https://lists.suckless.org/dwm/0805/5672.html) (10.05.2008)
-- [dvtm-0.4](https://www.brain-dump.org/projects/dvtm/dvtm-0.4.tar.gz)
-  [released](https://lists.suckless.org/dwm/0802/4850.html) (17.02.2008)
-- [dvtm-0.3](https://www.brain-dump.org/projects/dvtm/dvtm-0.3.tar.gz)
-  [released](https://lists.suckless.org/dwm/0801/4735.html) (12.01.2008)
-- [dvtm-0.2](https://www.brain-dump.org/projects/dvtm/dvtm-0.2.tar.gz)
-  [released](https://lists.suckless.org/dwm/0712/4677.html) (29.12.2007)
-- [dvtm-0.1](https://www.brain-dump.org/projects/dvtm/dvtm-0.1.tar.gz)
-  [released](https://lists.suckless.org/dwm/0712/4632.html) (21.12.2007)
-- [dvtm-0.01](https://www.brain-dump.org/projects/dvtm/dvtm-0.01.tar.gz)
-  [released](https://lists.suckless.org/dwm/0712/4424.html) (08.12.2007)
+1. the DV1/DV2 issue that caused latency on precesses(e.g. nvim quit).
+2. Fixed DSR that glitches the cursor position(e.g. lazygit quit).
+3. A color patch.
 
 ## Download
 
