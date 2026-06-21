@@ -3,9 +3,9 @@
 `det`, a better fork  of [dvtm](https://www.brain-dump.org/projects/dvtm/), brings the concept
 of tiling window management. It fixes 
 
-1. the DV1/DV2 issue that caused latency on precesses(e.g. nvim quit).
-2. Fixed DSR that glitches the cursor position(e.g. lazygit quit).
-3. A color patch.
+1. the DV1/DV2 issue that caused latency on precesses(e.g. nvim quit). [24b4c8bfa6c8] 
+2. Fixed DSR that glitches the cursor position(e.g. lazygit quit). [816eccbd4a1a]
+3. A color patch. [0eeb25ba90cf]
 
 ## TODO
 
