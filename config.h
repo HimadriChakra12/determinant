@@ -58,7 +58,7 @@ static Color colors[] = {
 /* curses attributes for not selected tags which with urgent windows */
 #define TAG_URGENT (COLOR(BLUE) | A_NORMAL | A_BLINK)
 
-const char tags[][8] = { "one", "two", "three", "four", "five", "six", "seven", "eight", "nine" };
+const char tags[][8] = { "one", "two", "three" };
 
 #include "src/layout/tile.c"
 #include "src/layout/grid.c"
@@ -103,8 +103,10 @@ static KeyBinding bindings[] = {
 	{ { LAZY, 'n',          }, { create,      { "neovim [ ]" }                    } },
 	{ { MOD, 'o',          }, { incnmaster,     { "+1" }                    } },
 	{ { MOD, 'O',          }, { incnmaster,     { "-1" }                    } },
-	{ { MOD, 'h',          }, { setmfact,       { "-0.05" }                 } },
-	{ { MOD, 'l',          }, { setmfact,       { "+0.05" }                 } },
+	{ { LAZY, 'h',          }, { setmfact,       { "-0.05" }                 } },
+	{ { LAZY, '-',          }, { setmfact,       { "-0.05" }                 } },
+	{ { LAZY, 'l',          }, { setmfact,       { "+0.05" }                 } },
+	{ { LAZY, '=',          }, { setmfact,       { "+0.05" }                 } },
 	{ { MOD, '.',          }, { toggleminimize, { NULL }                    } },
 	{ { MOD, 'b',          }, { togglebar,      { NULL }                    } },
 	{ { MOD, 'B',          }, { togglebarpos,   { NULL }                    } },
@@ -120,12 +122,7 @@ static KeyBinding bindings[] = {
     { { LAZY, CTRL('a'),          }, { focusn,         { "1" }                     } },
     { { LAZY, CTRL('s'),          }, { focusn,         { "2" }                     } },
     { { LAZY, CTRL('d'),          }, { focusn,         { "3" }                     } },
-	//{ { DALT, '4',          }, { view,         { tags[3] }                     } },
-	//{ { DALT, '5',          }, { view,         { tags[4] }                     } },
-	//{ { DALT, '6',          }, { view,         { tags[5] }                     } },
-	//{ { DALT, '7',          }, { view,         { tags[6] }                     } },
-	//{ { DALT, '8',          }, { view,         { tags[7] }                     } },
-	//{ { DALT, '9',          }, { view,         { tags[8] }                     } },
+    { { LAZY, CTRL('f'),          }, { focusn,         { "4" }                     } },
 	{ { MOD, '\t',         }, { focuslast,      { NULL }                    } },
 	{ { MOD, 'E',          }, { quit,           { NULL }                    } },
 	{ { MOD, 'a',          }, { togglerunall,   { NULL }                    } },
