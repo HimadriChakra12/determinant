@@ -1,6 +1,6 @@
 include config.mk
 
-SRC = det.c src/vt.c
+SRC = det.c src/vt.c src/modules.c modules/git.c
 BIN = det det-status det-editor det-pager
 MANUALS = det.1 det-editor.1 det-pager.1
 
@@ -10,7 +10,7 @@ DEBUG_CFLAGS = ${CFLAGS} -UNDEBUG -O0 -g -ggdb -Wall -Wextra -Wno-unused-paramet
 
 all: det det-editor
 
-det: config.h config.mk *.c *.h
+det: config.h config.mk *.c *.h src/*.c src/*.h modules/*.h
 	${CC} ${CFLAGS} ${SRC} ${LDFLAGS} ${LIBS} -o $@
 
 det-editor: det-editor.c

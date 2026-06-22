@@ -60,6 +60,28 @@ static Color colors[] = {
 
 const char tags[][8] = { "one", "two", "three" };
 
+/*
+ * Status bar layout. A plain array of pointers to Module structs,
+ * rendered left to right. Built-ins: SPACER (fills remaining space,
+ * divided evenly if you use more than one), SEPARATOR (a " | "
+ * between modules, auto-hidden if either neighbor has nothing to
+ * show), TAGS, LAYOUT, M_KEYS (in-progress key-chord echo), M_FIFO
+ * (the old `det -s fifo` external-script text, now just another
+ * module instead of being hardcoded to the right edge).
+ *
+ * To add your own module: copy modules/git.c + modules/git.h as a
+ * template, #include your new .h below, and reference its Module
+ * constant here. See modules/git.c and src/modules.h for the full
+ * module API, including the async pattern (for anything that shells
+ * out to an external command and shouldn't block det's main loop
+ * while it runs).
+ */
+#include "modules/git.h"
+
+static Module *statusline[] = {
+	&TAGS, &SPACER, &LAYOUT, &SEPARATOR, &M_KEYS, &SPACER, &M_GIT, &SEPARATOR, &M_FIFO,
+};
+
 #include "src/layout/tile.c"
 #include "src/layout/grid.c"
 #include "src/layout/bstack.c"

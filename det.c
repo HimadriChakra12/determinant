@@ -37,6 +37,7 @@
 # include <termios.h>
 #endif
 #include "src/vt.h"
+#include "src/modules.h"
 
 /*
  * Lightweight profiling, enabled only with DET_PROFILE=1 in the
@@ -373,30 +374,36 @@ hidebar(void) {
 	}
 }
 
-static void
-showbar(void) {
-	if (bar.pos == BAR_OFF)
-		bar.pos = bar.lastpos;
+static int
+tags_measure(const Module *self) {
+	(void)self;
+	int w = 0;
+	for (unsigned int i = 0; i < LENGTH(tags); i++)
+		w += strlen(tags[i]) + 2; /* TAG_SYMBOL is " %s ", i.e. +2 for the
+		                           * surrounding spaces around each label;
+		                           * if you change TAG_SYMBOL in config.h,
+		                           * update this to match or tag-module
+		                           * width/spacer math will drift off by
+		                           * however many columns TAG_SYMBOL's
+		                           * fixed decoration actually adds. */
+	return w;
 }
 
-static void
-drawbar(void) {
-	int sx, sy, x, y, width;
+static int
+tags_draw(const Module *self, int maxwidth) {
+	(void)self;
 	unsigned int occupied = 0, urgent = 0;
-	if (bar.pos == BAR_OFF)
-		return;
-
 	for (Client *c = clients; c; c = c->next) {
 		occupied |= c->tags;
 		if (c->urgent)
 			urgent |= c->tags;
 	}
 
-	getyx(stdscr, sy, sx);
-	attrset(BAR_ATTR);
-	move(bar.y, 0);
-
-	for (unsigned int i = 0; i < LENGTH(tags); i++){
+	int used = 0;
+	for (unsigned int i = 0; i < LENGTH(tags); i++) {
+		int w = strlen(tags[i]) + 2;
+		if (used + w > maxwidth)
+			break;
 		if (tagset[seltags] & (1 << i))
 			attrset(TAG_SEL);
 		else if (urgent & (1 << i))
@@ -406,43 +413,83 @@ drawbar(void) {
 		else
 			attrset(TAG_NORMAL);
 		printw(TAG_SYMBOL, tags[i]);
+		used += w;
 	}
+	return used;
+}
 
+static int
+layout_measure(const Module *self) {
+	(void)self;
+	return strlen(layout->symbol);
+}
+
+static int
+layout_draw(const Module *self, int maxwidth) {
+	(void)self;
 	attrset(runinall ? TAG_SEL : TAG_NORMAL);
-	attrset(TAG_NORMAL);
+	int w = strlen(layout->symbol);
+	if (w > maxwidth)
+		w = maxwidth;
 	addstr(layout->symbol);
+	return w;
+}
 
-	for (unsigned int i = 0; i < MAX_KEYS && keys[i]; i++) {
+Module TAGS   = { .name = "TAGS",   .draw = tags_draw,   .measure = tags_measure };
+Module LAYOUT = { .name = "LAYOUT", .draw = layout_draw, .measure = layout_measure };
+
+static bool
+keys_render(const Module *self, char *out, size_t outsz) {
+	(void)self;
+	size_t pos = 0;
+	for (unsigned int i = 0; i < MAX_KEYS && keys[i] && pos + 3 < outsz; i++) {
 		if (keys[i] < ' ')
-			printw("^%c", 'A' - 1 + keys[i]);
+			pos += snprintf(out + pos, outsz - pos, "^%c", 'A' - 1 + keys[i]);
 		else
-			printw("%c", keys[i]);
+			pos += snprintf(out + pos, outsz - pos, "%c", keys[i]);
 	}
+	out[pos] = '\0';
+	return pos > 0;
+}
 
-	getyx(stdscr, y, x);
-	(void)y;
-	int maxwidth = screen.w - x - 2;
+Module M_KEYS = { .name = "M_KEYS", .render = keys_render };
 
-	addch(BAR_BEGIN);
+static bool
+fifo_render(const Module *self, char *out, size_t outsz) {
+	(void)self;
+	if (bar.text[0] == '\0')
+		return false;
+	strncpy(out, bar.text, outsz - 1);
+	out[outsz - 1] = '\0';
+	return true;
+}
+
+/* Wraps the original FIFO-driven external status text (set BAR_FIFO
+ * / `det -s /path/to/fifo` and write to it from any script you like,
+ * same as before) as an ordinary module, so it can be placed anywhere
+ * in the statusline array instead of being hardcoded to the bar's
+ * right edge. */
+Module M_FIFO = { .name = "M_FIFO", .render = fifo_render };
+
+static void
+showbar(void) {
+	if (bar.pos == BAR_OFF)
+		bar.pos = bar.lastpos;
+}
+
+static void
+drawbar(void) {
+	int sx, sy;
+	if (bar.pos == BAR_OFF)
+		return;
+
+	getyx(stdscr, sy, sx);
 	attrset(BAR_ATTR);
+	move(bar.y, 0);
+	addch(BAR_BEGIN);
 
-	wchar_t wbuf[sizeof bar.text];
-	size_t numchars = mbstowcs(wbuf, bar.text, sizeof bar.text);
-
-	if (numchars != (size_t)-1 && (width = wcswidth(wbuf, maxwidth)) != -1) {
-		int pos;
-		for (pos = 0; pos + width < maxwidth; pos++)
-			addch(' ');
-
-		for (size_t i = 0; i < numchars; i++) {
-			pos += wcwidth(wbuf[i]);
-			if (pos > maxwidth)
-				break;
-			addnwstr(wbuf+i, 1);
-		}
-
-		clrtoeol();
-	}
+	int maxwidth = screen.w - 2; /* leave room for BAR_BEGIN/BAR_END */
+	statusline_render(statusline, LENGTH(statusline), maxwidth, BAR_ATTR);
 
 	attrset(TAG_NORMAL);
 	mvaddch(bar.y, screen.w - 1, BAR_END);
@@ -1971,6 +2018,8 @@ main(int argc, char *argv[]) {
 			c = c->next;
 		}
 
+		modules_async_fdset(statusline, LENGTH(statusline), &rd, &nfds);
+
 		{
 			double _t0 = profile_now();
 			doupdate();
@@ -1984,6 +2033,9 @@ main(int argc, char *argv[]) {
 			perror("select()");
 			exit(EXIT_FAILURE);
 		}
+
+		if (modules_async_dispatch(statusline, LENGTH(statusline), &rd))
+			drawbar();
 
 		if (FD_ISSET(STDIN_FILENO, &rd)) {
 			int code = getch();
