@@ -176,19 +176,9 @@ git_async_poll(Module *self, int fd) {
 	git_parse(st->buf, st->len, self->_cache, sizeof self->_cache);
 
 	int status;
-	waitpid(st->pid, &status, 0); /* reap -- we know it's finished or
-	                                * close enough (EOF/error on the
-	                                * pipe), a brief blocking wait here
-	                                * is for a process that's already
-	                                * exited or about to, not a stall */
+	waitpid(st->pid, &status, 0);
 	free(st);
 	self->_state = NULL;
-
-	/* Always "done" at this point (EOF or read error both end the
-	 * attempt) -- modules_async_dispatch() itself decides visibility
-	 * by checking whether _cache ended up empty, so just report 1
-	 * (don't conflate "git ran but found no repo" with "the async
-	 * operation itself failed", which would retry needlessly). */
 	return 1;
 }
 
