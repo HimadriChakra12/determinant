@@ -50,6 +50,7 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <limits.h>
 
 #define GIT_MODULE_REFRESH_SEC 2
 #define GIT_MODULE_BUF_MAX 8192
@@ -60,25 +61,61 @@ typedef struct {
 	size_t len;
 } GitState;
 
+/* Tracks the cwd the most recently completed (or in-flight) fetch
+ * used, so module_poll (called from the main loop on a timer) can
+ * tell "the focused pane's directory actually changed since last
+ * time" apart from "nothing changed, this is just the regular
+ * refresh interval firing" -- see git_render_due() below, which is
+ * what makes switching panes or cd-ing show the new repo's status
+ * immediately instead of waiting out the rest of the timer. */
+static char last_cwd[PATH_MAX] = "";
+
+static char *
+focused_cwd(void) {
+	int pid = modules_focused_pid();
+	if (pid < 0)
+		return NULL;
+	char buf[32];
+	snprintf(buf, sizeof buf, "/proc/%d/cwd", pid);
+	return realpath(buf, NULL);
+}
+
 static int
 git_async_start(Module *self) {
-	int pipefd[2];
-	if (pipe(pipefd) != 0)
+	char *cwd = focused_cwd();
+	/* No resolvable cwd (focused pane just died, /proc race, etc) --
+	 * don't fork into det's own cwd as a silent wrong-directory
+	 * fallback; just skip this cycle and try again next time. */
+	if (!cwd)
 		return -1;
+
+	snprintf(last_cwd, sizeof last_cwd, "%s", cwd);
+
+	int pipefd[2];
+	if (pipe(pipefd) != 0) {
+		free(cwd);
+		return -1;
+	}
 
 	pid_t pid = fork();
 	if (pid < 0) {
 		close(pipefd[0]);
 		close(pipefd[1]);
+		free(cwd);
 		return -1;
 	}
 
 	if (pid == 0) {
-		/* child: stdout -> pipe write end, stderr discarded (a
+		/* child: run in the focused pane's actual directory, not
+		 * det's own (fixed, almost certainly wrong) cwd -- this is
+		 * the actual fix for "switching repos doesn't update the
+		 * git module". stdout -> pipe write end, stderr discarded (a
 		 * non-repo directory makes git fail with an error message on
 		 * stderr we don't want leaking into anything; the pipe simply
 		 * has no useful output in that case, which the parser treats
 		 * the same as "not a repo"). */
+		if (chdir(cwd) != 0)
+			_exit(127);
 		close(pipefd[0]);
 		dup2(pipefd[1], STDOUT_FILENO);
 		int devnull = open("/dev/null", O_WRONLY);
@@ -89,6 +126,7 @@ git_async_start(Module *self) {
 		_exit(127); /* execlp failed (git not installed, etc) */
 	}
 
+	free(cwd);
 	/* parent */
 	close(pipefd[1]);
 	int flags = fcntl(pipefd[0], F_GETFL, 0);
@@ -176,15 +214,37 @@ git_async_poll(Module *self, int fd) {
 	git_parse(st->buf, st->len, self->_cache, sizeof self->_cache);
 
 	int status;
-	waitpid(st->pid, &status, 0);
+	waitpid(st->pid, &status, 0); /* reap -- we know it's finished or
+	                                * close enough (EOF/error on the
+	                                * pipe), a brief blocking wait here
+	                                * is for a process that's already
+	                                * exited or about to, not a stall */
 	free(st);
 	self->_state = NULL;
+
+	/* Always "done" at this point (EOF or read error both end the
+	 * attempt) -- modules_async_dispatch() itself decides visibility
+	 * by checking whether _cache ended up empty, so just report 1
+	 * (don't conflate "git ran but found no repo" with "the async
+	 * operation itself failed", which would retry needlessly). */
 	return 1;
+}
+
+static bool
+git_should_refresh_now(const Module *self) {
+	(void)self;
+	char *cwd = focused_cwd();
+	if (!cwd)
+		return false;
+	bool changed = strcmp(cwd, last_cwd) != 0;
+	free(cwd);
+	return changed;
 }
 
 Module M_GIT = {
 	.name = "M_GIT",
 	.async_start = git_async_start,
 	.async_poll = git_async_poll,
+	.should_refresh_now = git_should_refresh_now,
 	.refresh_interval_sec = GIT_MODULE_REFRESH_SEC,
 };

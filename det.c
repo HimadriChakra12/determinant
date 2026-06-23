@@ -374,6 +374,8 @@ hidebar(void) {
 	}
 }
 
+#include "src/modules.h"
+
 static int
 tags_measure(const Module *self) {
 	(void)self;
@@ -1163,6 +1165,11 @@ static char *getcwd_by_pid(Client *c) {
 	char buf[32];
 	snprintf(buf, sizeof buf, "/proc/%d/cwd", c->pid);
 	return realpath(buf, NULL);
+}
+
+int
+modules_focused_pid(void) {
+	return sel ? sel->pid : -1;
 }
 
 static void

@@ -69,7 +69,8 @@ module_refresh(Module *m) {
 		 * long that takes. */
 		time_t now = time(NULL);
 		bool due = (m->_last_render == 0)
-		        || (now - m->_last_render >= m->refresh_interval_sec);
+		        || (now - m->_last_render >= m->refresh_interval_sec)
+		        || (m->should_refresh_now && m->should_refresh_now(m));
 		/* "no operation in flight" means either we've never started
 		 * one yet (_has_started false -- covers the fresh-module
 		 * case where _async_fd is zero-initialized to 0, not -1) or

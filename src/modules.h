@@ -36,6 +36,25 @@
  * belong in a one-line status bar. */
 #define MODULE_TEXT_MAX 256
 
+/*
+ * Returns the pid of the currently focused pane's child process (the
+ * shell, or whatever's running in it), or -1 if there is no focused
+ * pane. Implemented in det.c, where the focused-client state (`sel`)
+ * actually lives -- this is the clean, generic way for a module to
+ * find out "what pane am I showing status for" without det.c needing
+ * to expose its internal Client struct to the module API.
+ *
+ * Modules that care about the focused pane's current directory (the
+ * git module is the motivating case: it needs to run `git status` in
+ * whatever repo the focused pane is actually in, not wherever det
+ * itself happened to be launched from) should resolve this pid's
+ * live cwd themselves via realpath("/proc/<pid>/cwd", NULL) --
+ * that's a /proc read of the kernel's live process state, so it
+ * automatically tracks both pane switches and plain `cd` within a
+ * shell, with no caching/staleness of its own.
+ */
+int modules_focused_pid(void);
+
 typedef struct Module Module;
 
 /*
@@ -90,12 +109,12 @@ typedef int (*ModuleMeasureFn)(const Module *self);
  * fully async via these two; mixing isn't supported):
  *
  *   async_start(self) is called once when the module's refresh
- *   interval is due. Fork/launch whatever you need (fork()+exec(),
- *   popen(), etc) and return a *non-blocking* fd to poll for output,
- *   stashing whatever state you need (pid, buffers) in self->_async.
- *   Return -1 on a launch failure -- the module is treated as
- *   "nothing to show" for this cycle and will retry next time it's
- *   due.
+ *   interval is due (or should_refresh_now says so early -- see
+ *   below). Fork/launch whatever you need (fork()+exec(), popen(),
+ *   etc) and return a *non-blocking* fd to poll for output, stashing
+ *   whatever state you need (pid, buffers) in self->_state. Return -1
+ *   on a launch failure -- the module is treated as "nothing to
+ *   show" for this cycle and will retry next time it's due.
  *
  *   async_poll(self, fd) is called from the main loop's normal
  *   select() handling once that fd is readable (det.c wires this up
@@ -108,9 +127,19 @@ typedef int (*ModuleMeasureFn)(const Module *self);
  *     0  = not done yet, keep polling.
  *    -1  = failed/EOF with nothing useful; det closes the fd, module
  *          shows as "nothing to show" until next refresh.
+ *
+ *   should_refresh_now(self) is optional. Checked every drawbar()
+ *   call in addition to the normal refresh_interval_sec timer -- if
+ *   it returns true, a new async_start() fires immediately even if
+ *   the timer hasn't elapsed yet. This is what lets the git module
+ *   update right away when you switch to a pane in a different repo,
+ *   instead of waiting out the rest of a 2-second timer showing the
+ *   previous pane's stale status. Return false (or leave this NULL)
+ *   if your module has nothing like this to check.
  */
 typedef int (*ModuleAsyncStartFn)(Module *self);
 typedef int (*ModuleAsyncPollFn)(Module *self, int fd);
+typedef bool (*ModuleShouldRefreshNowFn)(const Module *self);
 
 struct Module {
 	const char *name;          /* for your own debugging/reference only */
@@ -121,6 +150,7 @@ struct Module {
 	ModuleAsyncStartFn async_start; /* see ModuleAsyncFn docs above;
 	                                  * mutually exclusive with render */
 	ModuleAsyncPollFn async_poll;
+	ModuleShouldRefreshNowFn should_refresh_now; /* optional; see above */
 	int refresh_interval_sec;  /* 0 = re-render on every drawbar() call
 	                             * (redraw-driven only); >0 = also force
 	                             * a re-render at most this often even

@@ -79,7 +79,7 @@ const char tags[][8] = { "one", "two", "three" };
 #include "modules/git.h"
 
 static Module *statusline[] = {
-	&TAGS, &SPACER, &LAYOUT, &SEPARATOR, &M_KEYS, &SPACER, &M_GIT, &SEPARATOR, &M_FIFO,
+	&TAGS, &SPACER, &SPACER, &M_GIT, &LAYOUT, &SEPARATOR, &M_KEYS,&SEPARATOR, &M_FIFO,
 };
 
 #include "src/layout/tile.c"
@@ -138,9 +138,9 @@ static KeyBinding bindings[] = {
 	{ { GO, '1',          }, { view,         { tags[0] }                     } },
 	{ { GO, '2',          }, { view,         { tags[1] }                     } },
 	{ { GO, '3',          }, { view,         { tags[2] }                     } },
-	{ { LAZY, CTRL('q'),   }, { view,         { tags[0] }                     } },
-	{ { LAZY, CTRL('w'),   }, { view,         { tags[1] }                     } },
-	{ { LAZY, CTRL('e'),   }, { view,         { tags[2] }                     } },
+	{ { MOD, '1',          }, { view,         { tags[0] }                     } },
+	{ { MOD, '2',          }, { view,         { tags[1] }                     } },
+	{ { MOD, '3',          }, { view,         { tags[2] }                     } },
     { { LAZY, CTRL('a'),          }, { focusn,         { "1" }                     } },
     { { LAZY, CTRL('s'),          }, { focusn,         { "2" }                     } },
     { { LAZY, CTRL('d'),          }, { focusn,         { "3" }                     } },
